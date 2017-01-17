@@ -19,12 +19,9 @@ class ConstantField(object):
 
     def __init__(self, c=1.0):
         self.c = c
+        self.field = DyadicPWConstant(c * np.ones([2,2]), 1)
     
-    def make_fem_field(self, fem_div):
-        return self.c * np.ones([2**fem_div, 2**fem_div])
-
-
-class DyadicField(object):
+class DyadicRandomField(object):
     """ Creates a random field on a dyadic subdivision of the unit cube """
 
     def __init__(self, div, a_bar, c, seed=None):
@@ -34,7 +31,7 @@ class DyadicField(object):
         self.n_side = 2**div
 
         np.random.seed(seed)
-        self.field = a_bar + c * (2.0 * np.random.random([self.n_side, self.n_side]) - 1.0)
+        self.field = DyadicPWConstant(a_bar + c * (2.0 * np.random.random([self.n_side, self.n_side]) - 1.0), self.div)
         
     def make_fem_field(self, fem_div):
         # The field is defined to be constant on the dyadic squares
@@ -68,16 +65,7 @@ class DyadicField(object):
 
         #plt.show() 
         #fig = plt.figure()
-        sns.heatmap(self.field)
-
-
-class DyadicPWLinear(object):
-    """ Piecewise linear on the triangulated dyadic grid. This class automatically does
-        integration on sup-grid areas, and interpolation """
-
-class DyadicPWConstant(object):
-    """ Piecewise constant on the dyadic grid. This class automatically does
-        integration on sup-grid areas, and interpolation """
+        sns.heatmap(self.field.values)
 
 class DyadicFEMSolver(object):
     """ Solves the -div( a nabla u ) = f PDE on a grid, with a given by 
@@ -92,21 +80,14 @@ class DyadicFEMSolver(object):
         self.h = 1.0 / (self.n_side + 1)
 
         # Makes an appropriate sized field for our FEM grid
-        a = rand_field.make_fem_field(self.div)
+        a = rand_field.field.interpolate(self.div)
         
-        #A_test = np.zeros([self.n_side, self.n_side])
-        #for i in range(self.n_side):
-        #    A_test[i,i] = 
-        #    for j in range(self.n_side):
-        #        # Build the matrix by hand...
-        #        A_test[i,j] =  
-
         # Now we make the various diagonals
         diag = 2.0 * (a[:-1, :-1] + a[:-1,1:] + a[1:,:-1] + a[1:, 1:]).flatten()
         
         # min_diag is below the diagonal, hence deals with element to the left in the FEM grid
         lr_diag = -(a[1:, 1:] + a[:-1, 1:]).flatten()
-        lr_diag[self.n_side-1::self.n_side] = 0
+        lr_diag[self.n_side-1::self.n_side] = 0 # These corresponds to edges on left or right extreme
         lr_diag = lr_diag[:-1]
         
         # Far min deals with the element that is above
@@ -115,13 +96,16 @@ class DyadicFEMSolver(object):
         self.A = sparse.diags([diag, lr_diag, lr_diag, ud_diag, ud_diag], [0, -1, 1, -self.n_side, self.n_side]).tocsr()
         self.f = 0.5 * self.h * self.h * np.ones(self.n_el)
 
+        self.u = DyadicPWLinear(np.zeros([self.n_side + 2, self.n_side + 2]), self.div)
+
     def solve(self):
         """ The bilinear form simply becomes \int_D a nab u . nab v = \int_D f """
         u_flat = sparse.linalg.spsolve(self.A, self.f)
 
-        self.u = u_flat.reshape([self.n_side, self.n_side])
-        # Pad the zeros on each side... (due to the boundary conditions)
-        self.u = np.pad(self.u, ((1,1),(1,1)), 'constant')
+        u = u_flat.reshape([self.n_side, self.n_side])
+        # Pad the zeros on each side... (due to the boundary conditions) and make the 
+        # dyadic piecewise linear function object
+        self.u.values = np.pad(u, ((1,1),(1,1)), 'constant')
 
     def plot(self):
 
@@ -134,13 +118,43 @@ class DyadicFEMSolver(object):
 
         div_frame = 3
         if self.div > div_frame:
-            wframe = ax.plot_surface(xs, ys, self.u, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), cmap=cm.jet)
+            wframe = ax.plot_surface(xs, ys, self.u.values, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), cmap=cm.jet)
         else:
-            wframe = ax.plot_surface(xs, ys, self.u, cmap=cm.jet)
+            wframe = ax.plot_surface(xs, ys, self.u.values, cmap=cm.jet)
 
         #plt.show()
 
-class PWLinearFunction(object):
+class DyadicPWConstant(object):
+    """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
+        Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
+        """
+    
+    def __init__(self, values, div):
+
+        self.div = div
+        
+        if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div):
+            raise Exception("Error - values must be on a dyadic square of size {0}".format(2**div))
+
+        self.values = values
+        
+        # This grid is in the centers of the dyadic squares
+        self.x_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div - 1)
+        self.y_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div - 1)
+
+    def interpolate(self, div):
+        # The field is defined to be constant on the dyadic squares
+        # so here we generate a matrix of the values on all the dyadic squares at the
+        # finer mesh level, so that we can apply it in to the system easily
+        
+        if div >= self.div:
+            return self.values.repeat(2**(div - self.div), axis=0).repeat(2**(div - self.div), axis=1)
+        else:
+            raise Exception('DyadicPWConstant: Interpolate div must be greater than or equal to field div')
+
+    #TODO: Implement L2 and H1 with itself *AND* with the PW linear functions...
+
+class DyadicPWLinear(object):
     """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
         Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
         """
@@ -159,7 +173,7 @@ class PWLinearFunction(object):
         self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
     
     def H1_dot(self, f):
-        """ Compute the H1_0 dot product with another PWLinearFunction 
+        """ Compute the H1_0 dot product with another DyadicPWLinear function
             automatically interpolates the coarser function """
 
         u, v, match_div = self.match_grids(f)
@@ -177,7 +191,7 @@ class PWLinearFunction(object):
         return 0.5 * dot
 
     def L2_dot(self, f):
-        """ Compute the L2 dot product with another PWLinearFunction,
+        """ Compute the L2 dot product with another DyadicPWLinear function,
             automatically interpolates the coarser function """
         
         u, v, match_div = self.match_grids(f)
@@ -251,17 +265,6 @@ class PWLinearFunction(object):
                            np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True))
 
         return interp_func(x, y)
-
-
-"""class CoarseGridVn(object):
-
-    def __init__(self, div, vals):
-
-        self.
-
-    def dot"""
-        
-
 
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
