@@ -125,7 +125,7 @@ class DyadicFEMSolver(object):
 
     def plot(self):
 
-        x = np.linspace(0.0, 1.0, self.n_side + 2, endpoint = True) 
+        x = np.linspace(0.0, 1.0, self.n_side + 2, endpoint = True)
         #z_interp = scipy.interpolate.interp2d(x, x, self.u, kind='linear')
         xs, ys = np.meshgrid(x, x)
 
@@ -140,8 +140,135 @@ class DyadicFEMSolver(object):
 
         #plt.show()
 
-class Measurement(object):
+class PWLinearFunction(object):
+    """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
+        Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
+        """
+
+    def __init__(self, values, div):
+
+        self.div = div
+        
+        if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div + 1):
+            raise Exception("Error - values must be on a dyadic square of size {0}".format(2**div))
+
+        self.values = values
+        # TODO: include a notion of the spatial grid, so that our interpolation
+        # can be more general and we are not just stuck to the unit cube
+        self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+        self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+    
+    def H1_dot(self, f):
+        """ Compute the H1_0 dot product with another PWLinearFunction 
+            automatically interpolates the coarser function """
+
+        u, v, match_div = self.match_grids(f)
+
+        h = 2.0**(-match_div)
+        n_side = 2**match_div
+
+        p = 2 * np.ones([n_side, n_side+1])
+        p[:,0] = p[:,-1] = 1
+        dot = (p * (u[1:,:] - u[:-1,:]) * (v[1:,:] - v[:-1,:])).sum()
+        p = 2 * np.ones([n_side+1, n_side])
+        p[0,:] = p[-1,:] = 1
+        dot = dot + (p * (u[:,:-1] - u[:,1:]) * (v[:,:-1] - v[:,1:])).sum()
+
+        return 0.5 * dot
+
+    def L2_dot(self, f):
+        """ Compute the L2 dot product with another PWLinearFunction,
+            automatically interpolates the coarser function """
+        
+        u, v, match_div = self.match_grids(f)
+
+        h = 2.0**(-match_div)
+        n_side = 2**match_div
+
+        # u and v are on the same grid / triangulation, so now we do the simple L2
+        # inner product (hah... simple??)
+
+        # the point adjacency matrix
+        p = 6 * np.ones([n_side+1, n_side+1])
+        p[:,0] = p[0,:] = p[:,-1] = p[-1,:] = 3 
+        p[0,0] = p[-1,-1] = 1
+        p[0,-1] = p[-1, 0] = 2 
+        dot = (u * v * p).sum()
+        
+        # Now add all the vertical edges
+        p = 2 * np.ones([n_side, n_side+1])
+        p[0,:] = p[-1,:] = 1
+        dot = dot + ((u[1:,:] * v[:-1,:] + u[:-1,:] * v[1:,:]) * p * 0.5).sum()
+
+        # Now add all the horizontal edges
+        p = 2 * np.ones([n_side+1, n_side])
+        p[:,0] = p[:,-1] = 1
+        dot = dot + ((u[:,1:] * v[:,:-1] + u[:,:-1] * v[:,1:]) * p * 0.5).sum()
+
+        # Finally all the diagonals (note every diagonal is adjacent to two triangles,
+        # so don't need p)
+        dot = dot + (u[:-1,1:] * v[1:,:-1] + u[1:,:-1] * v[:-1,1:] ).sum()
+        
+        """ An element wise test of my matrix based calculation above...
+
+        dot2 = 0.0
+        for i in range(n_side):
+            for j in range(n_side):
+
+                dot2 = dot2 + ( u[i,j] * v[i,j] + u[i+1,j]*v[i+1,j] + u[i,j+1]*v[i,j+1]
+                                            + 0.5 * (u[i,j]*v[i+1,j] + u[i+1,j] * v[i,j]
+                                                    +u[i,j]*v[i,j+1] + u[i,j+1] * v[i,j]
+                                                    +u[i,j+1]*v[i+1,j] + u[i+1,j]*v[i,j+1])
+                                            + u[i+1,j]*v[i+1,j] + u[i,j+1]*v[i,j+1] + u[i+1,j+1]*v[i+1,j+1]
+                                            + 0.5 * (u[i+1,j+1]*v[i+1,j] + u[i+1,j]*v[i+1,j+1]
+                                                    +u[i+1,j+1]*v[i,j+1] + u[i,j+1]*v[i+1,j+1]
+                                                    +u[i+1,j]*v[i,j+1] + u[i,j+1]*v[i+1,j]) ) """
+
+        return h * h * dot / 12
+
+    def match_grids(self, f):
+        """ Check the dyadic division of f and adjust the coarser one,
+            which we do through linear interpolation, returns two functions
+            matched, with necessary interpolation, and the division
+            level to which we interpolated """
+
+        if self.div == f.div:
+            return self.values, f.values, self.div
+        if self.div > f.div:
+            return self.values, f.interpolate(self.div), self.div
+        if self.div < f.div:
+            return self.interpolate(f.div), f.values, f.div
+
+    def interpolate(self, interp_div):
+        """ Simple interpolation routine to make this function on a finer division dyadic grid """
+        
+        if (interp_div < self.div):
+            raise Exception("Interpolation division smaller than field division! Need to integrate")
+
+        interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.values, kind='linear')
+
+        x, y = np.meshgrid(np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True), \
+                           np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True))
+
+        return interp_func(x, y)
+
+
+"""class CoarseGridVn(object):
+
+    def __init__(self, div, vals):
+
+        self.
+
+    def dot"""
+        
+
+
+class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
 
-class Approximation(object):
-    """ A reconstruction """
+class RandomPointMeasurements(Measurements):
+
+    def __init__(self, i, j):
+        self.i = i
+        self.j = j
+
