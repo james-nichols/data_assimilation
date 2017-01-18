@@ -46,27 +46,6 @@ class DyadicRandomField(object):
         # Just flatten!
         fem_field_flat = self.make_fem_field(fem_div).flatten()
 
-    def plot(self):
-        """ This routine just knows that it's piece-wise constant and can plot appropriately """
-       
-        
-        """x = np.linspace(0.0, 1.0, self.n_side , endpoint = True) 
-        #z_interp = scipy.interpolate.interp2d(x, x, self.u, kind='linear')
-        xs, ys = np.meshgrid(x, x)
-
-        fig = plt.figure()
-        ax = Axes3D(fig)
-        pdb.set_trace()
-        div_frame = 5
-        if self.div > div_frame:
-            wframe = ax.plot_surface(xs, ys, self.field, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame))
-        else:
-            wframe = ax.plot_surface(xs, ys, self.field)"""
-
-        #plt.show() 
-        #fig = plt.figure()
-        sns.heatmap(self.field.values)
-
 class DyadicFEMSolver(object):
     """ Solves the -div( a nabla u ) = f PDE on a grid, with a given by 
         some random / deterministic field, with dirichelet boundary conditions """
@@ -107,22 +86,6 @@ class DyadicFEMSolver(object):
         # dyadic piecewise linear function object
         self.u.values = np.pad(u, ((1,1),(1,1)), 'constant')
 
-    def plot(self):
-
-        x = np.linspace(0.0, 1.0, self.n_side + 2, endpoint = True)
-        #z_interp = scipy.interpolate.interp2d(x, x, self.u, kind='linear')
-        xs, ys = np.meshgrid(x, x)
-
-        fig = plt.figure()
-        ax = Axes3D(fig)
-
-        div_frame = 3
-        if self.div > div_frame:
-            wframe = ax.plot_surface(xs, ys, self.u.values, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), cmap=cm.jet)
-        else:
-            wframe = ax.plot_surface(xs, ys, self.u.values, cmap=cm.jet)
-
-        #plt.show()
 
 class DyadicPWConstant(object):
     """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
@@ -153,6 +116,19 @@ class DyadicPWConstant(object):
             raise Exception('DyadicPWConstant: Interpolate div must be greater than or equal to field div')
 
     #TODO: Implement L2 and H1 with itself *AND* with the PW linear functions...
+
+    
+    def plot(self, ax, title='Dyadic piecewise constant function', alpha=0.5, cmap=cm.jet):
+
+        # We do some tricks here (i.e. using np.repeat) to plot the piecewise constant nature of the random field...
+        x = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint = True).repeat(2)[1:-1]
+        xs, ys = np.meshgrid(x, x)
+        wframe = ax.plot_surface(xs, ys, self.values.repeat(2, axis=0).repeat(2, axis=1), cstride=1, rstride=1,
+                                 cmap=cmap, alpha=alpha)
+        ax.set_title(title)
+        ax.set_xlabel('$x$')
+        ax.set_ylabel('$y$')
+        ax.set_axis_bgcolor('white')
 
 class DyadicPWLinear(object):
     """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
@@ -265,6 +241,23 @@ class DyadicPWLinear(object):
                            np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True))
 
         return interp_func(x, y)
+
+    def plot(self, ax, title='Piecewise linear function', div_frame=4, alpha=0.5, cmap=cm.jet):
+        
+        x = np.linspace(0.0, 1.0, self.values.shape[0], endpoint = True)
+        y = np.linspace(0.0, 1.0, self.values.shape[1], endpoint = True)
+        xs, ys = np.meshgrid(x, y)
+
+        if self.div > div_frame:
+            wframe = ax.plot_surface(xs, ys, self.values, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), 
+                                     cmap=cmap, alpha=alpha)
+        else:
+            wframe = ax.plot_surface(xs, ys, self.values, cmap=cmap)
+
+        ax.set_axis_bgcolor('white')
+        ax.set_xlabel('$x$')
+        ax.set_ylabel('$y$')
+        ax.set_title(title)
 
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
