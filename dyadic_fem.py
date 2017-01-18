@@ -237,13 +237,12 @@ class DyadicPWLinear(object):
 
         interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.values, kind='linear')
 
-        x, y = np.meshgrid(np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True), \
-                           np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True))
-
+        x = y = np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True)
+        
         return interp_func(x, y)
 
     def plot(self, ax, title='Piecewise linear function', div_frame=4, alpha=0.5, cmap=cm.jet):
-        
+
         x = np.linspace(0.0, 1.0, self.values.shape[0], endpoint = True)
         y = np.linspace(0.0, 1.0, self.values.shape[1], endpoint = True)
         xs, ys = np.meshgrid(x, y)
@@ -252,7 +251,7 @@ class DyadicPWLinear(object):
             wframe = ax.plot_surface(xs, ys, self.values, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), 
                                      cmap=cmap, alpha=alpha)
         else:
-            wframe = ax.plot_surface(xs, ys, self.values, cmap=cmap)
+            wframe = ax.plot_surface(xs, ys, self.values, cstride=1, rstride=1, cmap=cmap, alpha=alpha)
 
         ax.set_axis_bgcolor('white')
         ax.set_xlabel('$x$')
