@@ -135,19 +135,41 @@ class DyadicPWLinear(object):
         Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
         """
 
-    def __init__(self, values, div):
-
-        self.div = div
+    def __init__(self, values = None, div = None, func = None):
         
-        if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div + 1):
-            raise Exception("Error - values must be on a dyadic square of size {0}".format(2**div))
-
-        self.values = values
-        # TODO: include a notion of the spatial grid, so that our interpolation
-        # can be more general and we are not just stuck to the unit cube
-        self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
-        self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+        if div is not None:
+            self.div = div
+            self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+            self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
     
+            if func is not None:
+                if values is not None:
+                    raise Exception('DyadicPWLinear: Specify either a function or the values, not both')
+                x, y = np.meshgrid(self.x_grid, self.y_grid)
+                self.values = func(x, y)
+            elif values is not None:
+                if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div + 1):
+                    raise Exception("DyadicPWLinear: Error - values must be on a dyadic square of size {0}".format(2**div+1))
+                self.values = values
+
+            else:
+                self.values = np.zeros([2**self.div + 1, 2**self.div + 1])
+        else:
+            if values is not None:
+                self.values = values
+                self.div = int(np.log(values.shape[0] - 1, 2))
+                if (values.shape[0] != values.shape[1] and values.shape[0] != 2**self.div + 1):
+                    raise Exception("DyadicPWLinear: Error - values must be on a dyadic square, shape of {0} closest to {1}".format(2**self.div))
+                self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+                self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+            elif func is not None:
+                raise Exception('DyadicPWLinear: Error - need grid size when specifying function')
+
+            # else: nothing is set up
+
+            # TODO: keep the function so we can do a proper interpolation, not just a linear
+            # interpolation... but maybe we don't want that either
+
     def H1_dot(self, f):
         """ Compute the H1_0 dot product with another DyadicPWLinear function
             automatically interpolates the coarser function """
@@ -157,14 +179,16 @@ class DyadicPWLinear(object):
         h = 2.0**(-match_div)
         n_side = 2**match_div
 
+        # This is du/dy
         p = 2 * np.ones([n_side, n_side+1])
         p[:,0] = p[:,-1] = 1
-        dot = (p * (u[1:,:] - u[:-1,:]) * (v[1:,:] - v[:-1,:])).sum()
+        dot = (p * (u[:-1,:] - u[1:,:]) * (v[:-1,:] - v[1:,:])).sum()
+        # And this is du/dx
         p = 2 * np.ones([n_side+1, n_side])
         p[0,:] = p[-1,:] = 1
-        dot = dot + (p * (u[:,:-1] - u[:,1:]) * (v[:,:-1] - v[:,1:])).sum()
-
-        return 0.5 * dot
+        dot = dot + (p * (u[:,1:] - u[:,:-1]) * (v[:,1:] - v[:,:-1])).sum()
+        
+        return 0.5 * dot + self.L2_inner(u,v,h)
 
     def L2_dot(self, f):
         """ Compute the L2 dot product with another DyadicPWLinear function,
@@ -173,25 +197,27 @@ class DyadicPWLinear(object):
         u, v, match_div = self.match_grids(f)
 
         h = 2.0**(-match_div)
-        n_side = 2**match_div
 
+        return self.L2_inner(u,v,h)
+
+    def L2_inner(self, u, v, h):
         # u and v are on the same grid / triangulation, so now we do the simple L2
         # inner product (hah... simple??)
 
         # the point adjacency matrix
-        p = 6 * np.ones([n_side+1, n_side+1])
-        p[:,0] = p[0,:] = p[:,-1] = p[-1,:] = 3 
+        p = 6 * np.ones(u.shape)
+        p[:,0] = p[0,:] = p[:,-1] = p[-1,:] = 3
         p[0,0] = p[-1,-1] = 1
         p[0,-1] = p[-1, 0] = 2 
         dot = (u * v * p).sum()
         
         # Now add all the vertical edges
-        p = 2 * np.ones([n_side, n_side+1])
+        p = 2 * np.ones([u.shape[0]-1, u.shape[1]])
         p[0,:] = p[-1,:] = 1
         dot = dot + ((u[1:,:] * v[:-1,:] + u[:-1,:] * v[1:,:]) * p * 0.5).sum()
 
         # Now add all the horizontal edges
-        p = 2 * np.ones([n_side+1, n_side])
+        p = 2 * np.ones([u.shape[0], u.shape[1]-1])
         p[:,0] = p[:,-1] = 1
         dot = dot + ((u[:,1:] * v[:,:-1] + u[:,:-1] * v[:,1:]) * p * 0.5).sum()
 
@@ -257,6 +283,61 @@ class DyadicPWLinear(object):
         ax.set_xlabel('$x$')
         ax.set_ylabel('$y$')
         ax.set_title(title)
+
+    # Here we overload the + += - -= * and / operators
+    
+    def __add__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            return DyadicPWLinear(u + v, d)
+        else:
+            return DyadicPWLinear(self.values * other, self.div)
+
+    __radd__ = __add__
+
+    def __iadd__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            self.div = d
+            self.values = u + v
+        else:
+            self.values = self.values + other
+        return self
+        
+    def __sub__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            return DyadicPWLinear(u - v, d)
+        else:
+            return DyadicPWLinear(self.values * other, self.div)
+    __rsub__ = __sub__
+
+    def __isub__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            self.div = d
+            self.values = u - v
+        else:
+            self.values = self.values - other
+        return self
+
+    def __mul__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            return DyadicPWLinear(u * v, d)
+        else:
+            return DyadicPWLinear(self.values * other, self.div)
+    __rmul__ = __mul__
+
+    def __pow__(self,power):
+        return DyadicPWLinear(self.values**power, self.div)
+
+    def __truediv__(self,other):
+        if isinstance(other, DyadicPWLinear):
+            u,v,d = self.match_grids(other)
+            return DyadicPWLinear(u / v, d)
+        else:
+            return DyadicPWLinear(self.values / other, self.div)
 
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
