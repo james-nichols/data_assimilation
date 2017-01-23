@@ -96,7 +96,7 @@ class DyadicPWConstant(object):
 
         self.div = div
         
-        if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div):
+        if (values.shape[0] != values.shape[1] or values.shape[0] != 2**div):
             raise Exception("Error - values must be on a dyadic square of size {0}".format(2**div))
 
         self.values = values
@@ -148,7 +148,7 @@ class DyadicPWLinear(object):
                 x, y = np.meshgrid(self.x_grid, self.y_grid)
                 self.values = func(x, y)
             elif values is not None:
-                if (values.shape[0] != values.shape[1] and values.shape[0] != 2**div + 1):
+                if (values.shape[0] != values.shape[1] or values.shape[0] != 2**div + 1):
                     raise Exception("DyadicPWLinear: Error - values must be on a dyadic square of size {0}".format(2**div+1))
                 self.values = values
 
@@ -157,9 +157,9 @@ class DyadicPWLinear(object):
         else:
             if values is not None:
                 self.values = values
-                self.div = int(np.log(values.shape[0] - 1, 2))
-                if (values.shape[0] != values.shape[1] and values.shape[0] != 2**self.div + 1):
-                    raise Exception("DyadicPWLinear: Error - values must be on a dyadic square, shape of {0} closest to {1}".format(2**self.div))
+                self.div = int(math.log(values.shape[0] - 1, 2))
+                if (values.shape[0] != values.shape[1] or values.shape[0] != 2**self.div + 1):
+                    raise Exception("DyadicPWLinear: Error - values must be on a dyadic square, shape of {0} closest to div {1}".format(2**self.div, self.div))
                 self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
                 self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
             elif func is not None:
@@ -170,6 +170,14 @@ class DyadicPWLinear(object):
             # TODO: keep the function so we can do a proper interpolation, not just a linear
             # interpolation... but maybe we don't want that either
 
+    def dot(self, f, norm='L2'):
+        if norm == 'L2':
+            return self.L2_dot(f)
+        elif norm == 'H1':
+            return self.H1_dot(f)
+        else:
+            raise Exception('Unrecognised Hilbert space norm ' + norm)
+    
     def H1_dot(self, f):
         """ Compute the H1_0 dot product with another DyadicPWLinear function
             automatically interpolates the coarser function """
@@ -339,6 +347,63 @@ class DyadicPWLinear(object):
         else:
             return DyadicPWLinear(self.values / other, self.div)
 
+class Basis(object):
+    """ A vaguely useful encapsulation of what you'd wanna do with a basis,
+        including an orthonormalisation procedure """
+
+    def __init__(self, vecs, norm='L2'):
+        # No smart initialisation here...
+        self.vecs = vecs
+        self.n = len(vecs)
+        self.norm = norm
+
+    def dot(self, u, norm=self.norm)
+        # NB we can overide the norm to get different projections if ew want
+        u_d = np.zeros(n)
+        for v, i in iter(self.vecs):
+            u_d[i] = v.dot(u, norm)
+        return u_d
+
+    def make_grammian(self):
+        self.G = np.zeros([n,n])
+        for i in range(n):
+            for j in range(i):
+                self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.norm)
+
+    def project(self, u):
+        
+        # Either we've made the orthonormal basis...
+        if self.orthonormal_basis is not None:
+            return self.orthonormal_basis.dot(u) 
+        else:
+            u_n = self.dot(u)
+            y_n = np.linalg.solve(G, u_p)
+
+            # We allow the projection to be of generic type
+            u_p = type(vecs[0])
+            for y, i in iter(y_n):
+                u_p += y * self.vecs[i]
+
+            return u_p
+
+
+    def orthonormalise(self):
+
+        
+
+        return OrthonormalBasis
+
+class OrthonormalBasis(object):
+
+
+
+def MakeHatBasis( ):
+    pass
+def MakeCosineBasis():
+    pass
+def MakeApproxBasis():
+    # Make it out of a few solutions of dyadic
+    pass
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
 
