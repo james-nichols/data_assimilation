@@ -170,13 +170,16 @@ class DyadicPWLinear(object):
             # TODO: keep the function so we can do a proper interpolation, not just a linear
             # interpolation... but maybe we don't want that either
 
-    def dot(self, f, norm='L2'):
-        if norm == 'L2':
+    def dot(self, f, space='L2'):
+        if space == 'L2':
             return self.L2_dot(f)
-        elif norm == 'H1':
+        elif space == 'H1':
             return self.H1_dot(f)
         else:
-            raise Exception('Unrecognised Hilbert space norm ' + norm)
+            raise Exception('Unrecognised Hilbert space norm ' + space)
+
+    def norm(self, space='L2'):
+        return self.dot(self, space)
     
     def H1_dot(self, f):
         """ Compute the H1_0 dot product with another DyadicPWLinear function
@@ -351,53 +354,85 @@ class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
         including an orthonormalisation procedure """
 
-    def __init__(self, vecs, norm='L2'):
+    def __init__(self, vecs, space='L2'):
         # No smart initialisation here...
         self.vecs = vecs
         self.n = len(vecs)
-        self.norm = norm
+        self.space = space
+        # Make a flat "values" thing for speed's sake, so we
+        # can use numpy power!
+        self.values_flat = self.vecs[0].values
+        for vec in self.vecs[1:]:
+            self.values_flat = np.dstack((self.values_flat, vec.values))
 
-    def dot(self, u, norm=self.norm)
+        self.orthonormal_basis = None
+        self.G = None
+
+    def dot(self, u):
         # NB we can overide the norm to get different projections if ew want
-        u_d = np.zeros(n)
-        for v, i in iter(self.vecs):
-            u_d[i] = v.dot(u, norm)
+        u_d = np.zeros(self.n)
+        for i, v in enumerate(self.vecs):
+            u_d[i] = v.dot(u, self.space)
         return u_d
 
     def make_grammian(self):
-        self.G = np.zeros([n,n])
-        for i in range(n):
-            for j in range(i):
-                self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.norm)
+        self.G = np.zeros([self.n,self.n])
+        for i in range(self.n):
+            for j in range(i+1):
+                self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.space)
 
     def project(self, u):
         
         # Either we've made the orthonormal basis...
         if self.orthonormal_basis is not None:
-            return self.orthonormal_basis.dot(u) 
+            return self.orthonormal_basis.project(u) 
         else:
+            if self.G is None:
+                self.make_grammian()
+
             u_n = self.dot(u)
-            y_n = np.linalg.solve(G, u_p)
+            y_n = np.linalg.solve(self.G, u_n)
 
-            # We allow the projection to be of generic type
-            u_p = type(vecs[0])
-            for y, i in iter(y_n):
-                u_p += y * self.vecs[i]
-
+            # We allow the projection to be of the same type 
+            # Also create it from the simple broadcast and sum (which surely should
+            # be equivalent to some tensor product thing??)
+            u_p = type(self.vecs[0])((y_n * self.values_flat).sum(axis=2)) 
+        
             return u_p
-
 
     def orthonormalise(self):
 
+        if self.G is None:
+            self.make_grammian()
+
+        L = np.linalg.cholesky(self.G)
+        L_inv = scipy.linalg.lapack.dtrtri(L.T)[0]
         
+        ortho_vecs = []
+        for i in range(self.n):
+            ortho_vecs.append(type(self.vecs[0])((L_inv[:,i] * self.values_flat).sum(axis=2)))
 
-        return OrthonormalBasis
+        self.orthonormal_basis = OrthonormalBasis(ortho_vecs, self.space)
 
-class OrthonormalBasis(object):
+        return self.orthonormal_basis
+
+class OrthonormalBasis(Basis):
+
+    def __init__(self, vecs, space='L2'):
+        super().__init__(vecs, space)
+        self.G = np.eye(self.n)
+
+    def project(self, u):
+        # Now that the system is orthonormal, we don't need to solve a linear system
+        # to make the projection
+        y_n = self.dot(u)
+        return type(self.vecs[0])((y_n * self.values_flat).sum(axis=2)) 
+
+    def orthonormalise(self):
+        return self
 
 
-
-def MakeHatBasis( ):
+def MakeHatBasis():
     pass
 def MakeCosineBasis():
     pass
