@@ -30,7 +30,8 @@ class DyadicRandomField(object):
         self.div = div
         self.n_side = 2**div
 
-        np.random.seed(seed)
+        if seed is not None:
+            np.random.seed(seed)
         self.field = DyadicPWConstant(a_bar + c * (2.0 * np.random.random([self.n_side, self.n_side]) - 1.0), self.div)
         
     def make_fem_field(self, fem_div):
@@ -118,17 +119,20 @@ class DyadicPWConstant(object):
     #TODO: Implement L2 and H1 with itself *AND* with the PW linear functions...
 
     
-    def plot(self, ax, title='Dyadic piecewise constant function', alpha=0.5, cmap=cm.jet):
+    def plot(self, ax, title=None, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
 
         # We do some tricks here (i.e. using np.repeat) to plot the piecewise constant nature of the random field...
         x = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint = True).repeat(2)[1:-1]
         xs, ys = np.meshgrid(x, x)
         wframe = ax.plot_surface(xs, ys, self.values.repeat(2, axis=0).repeat(2, axis=1), cstride=1, rstride=1,
                                  cmap=cmap, alpha=alpha)
-        ax.set_title(title)
-        ax.set_xlabel('$x$')
-        ax.set_ylabel('$y$')
+        
         ax.set_axis_bgcolor('white')
+        if show_axes_labels:
+            ax.set_xlabel('$x$')
+            ax.set_ylabel('$y$')
+        if title is not None:
+            ax.set_title(title)
 
 class DyadicPWLinear(object):
     """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
@@ -141,7 +145,7 @@ class DyadicPWLinear(object):
             self.div = div
             self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
             self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
-    
+            
             if func is not None:
                 if values is not None:
                     raise Exception('DyadicPWLinear: Specify either a function or the values, not both')
@@ -278,7 +282,7 @@ class DyadicPWLinear(object):
         
         return interp_func(x, y)
 
-    def plot(self, ax, title='Piecewise linear function', div_frame=4, alpha=0.5, cmap=cm.jet):
+    def plot(self, ax, title=None, div_frame=4, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
 
         x = np.linspace(0.0, 1.0, self.values.shape[0], endpoint = True)
         y = np.linspace(0.0, 1.0, self.values.shape[1], endpoint = True)
@@ -291,9 +295,11 @@ class DyadicPWLinear(object):
             wframe = ax.plot_surface(xs, ys, self.values, cstride=1, rstride=1, cmap=cmap, alpha=alpha)
 
         ax.set_axis_bgcolor('white')
-        ax.set_xlabel('$x$')
-        ax.set_ylabel('$y$')
-        ax.set_title(title)
+        if show_axes_labels:
+            ax.set_xlabel('$x$')
+            ax.set_ylabel('$y$')
+        if title is not None:
+            ax.set_title(title)
 
     # Here we overload the + += - -= * and / operators
     
@@ -404,7 +410,10 @@ class Basis(object):
 
         if self.G is None:
             self.make_grammian()
-
+        
+        # We do a cholesky factorisation rather than a Gram Schmidt, as
+        # we have a symmetric +ve definite matrix, so this is a cheap and
+        # easy way to get an orthonormal basis from our previous basis
         L = np.linalg.cholesky(self.G)
         L_inv = scipy.linalg.lapack.dtrtri(L.T)[0]
         
@@ -432,13 +441,58 @@ class OrthonormalBasis(Basis):
         return self
 
 
-def MakeHatBasis():
+def make_hat_basis(div, space='L2'):
+    # Makes a complete hat basis for division div
+    V_n = []
+    # n is the number of internal grid points, i.e. we will have n different hat functionsdd
+    # for our coarse-grid basis
+    side_n = 2**div-1
+
+    for k in range(side_n):
+        for l in range(side_n):
+            v_i = DyadicPWLinear(div = div)
+            v_i.values[k+1, l+1] = 1.0
+            V_n.append(v_i)
+
+    return Basis(V_n, space=space)
+
+def make_sine_basis(div, N, M, space='L2'):
+    V_n = []
+    # n is the number of internal grid points, i.e. we will have n different hat functionsdd
+    # for our coarse-grid basis
+
+    for n in range(1,N+1):
+        for m in range(1,M+1):
+            def f(x,y): return np.sin(n * math.pi * x) * np.sin(m * math.pi * y)
+            
+            v_i = DyadicPWLinear(func = f, div = div)
+            V_n.append(v_i)
+
+    return Basis(V_n, space=space)
+
+def make_random_approx_basis(N, fem_div, field_div, space='L2', a_bar=1.0, c=0.5, seed=None):
+    # Make a basis of N solutions to the FEM problem, from random generated fields
+
+    if (field_div > fem_div):
+        raise Exception('Dyadic subdivision for FEM solution must be larger than for the random field')
+
+    V_n = []
+    fields = []
+    for n in range(N):
+        a = DyadicRandomField(div=field_div, a_bar=a_bar, c=c, seed=seed)
+        fields.append(a)
+        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+        fem.solve()
+        V_n.append(fem.u)
+
+    return Basis(V_n, space=space), fields
+
+
+def make_approx_basis(div, field_div):
+    # Make it out of a few solutions FEM
     pass
-def MakeCosineBasis():
-    pass
-def MakeApproxBasis():
-    # Make it out of a few solutions of dyadic
-    pass
+
+
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
 
