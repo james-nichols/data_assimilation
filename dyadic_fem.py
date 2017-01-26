@@ -488,10 +488,24 @@ def make_random_approx_basis(N, fem_div, field_div, space='L2', a_bar=1.0, c=0.5
     return Basis(V_n, space=space), fields
 
 
-def make_approx_basis(div, field_div):
-    # Make it out of a few solutions FEM
-    pass
+def make_approx_basis(fem_div, field_div, low_point=0.01, space='L2'):
+    # Make it out of a few solutions FE
+    if (field_div > fem_div):
+        raise Exception('Dyadic subdivision for FEM solution must be larger than for the random field')
 
+    side_n = 2**field_div
+    V_n = []
+    fields = []
+    for i in range(side_n):
+        for j in range(side_n):
+            a = DyadicRandomField(div=field_div, a_bar=1.0, c=0.0, seed=None)
+            a.field.values[i,j] = low_point
+            fields.append(a)
+            fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+            fem.solve()
+            V_n.append(fem.u)
+
+    return Basis(V_n, space=space), fields
 
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
