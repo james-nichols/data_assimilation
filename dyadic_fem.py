@@ -7,6 +7,7 @@ import scipy.optimize
 import scipy.interpolate
 from scipy import sparse
 from itertools import *
+import inspect
 
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -93,18 +94,53 @@ class DyadicPWConstant(object):
         Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
         """
     
-    def __init__(self, values, div):
+    def __init__(self, values = None, div = None, func = None):
 
-        self.div = div
+        if div is not None:
+            self.div = div
         
-        if (values.shape[0] != values.shape[1] or values.shape[0] != 2**div):
-            raise Exception("Error - values must be on a dyadic square of size {0}".format(2**div))
+            # This grid is in the centers of the dyadic squares
+            self.x_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div-1)
+            self.y_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div-1)
+            
+            if func is not None:
+                if values is not None:
+                    raise Exception('DyadicPWConstant: Specify either a function or the values, not both')
+                x, y = np.meshgrid(self.x_grid, self.y_grid)
+                self.values = func(x, y)
+            elif values is not None:
+                if (values.shape[0] != values.shape[1] or values.shape[0] != 2**div):
+                    raise Exception("DyadicPWConstant: Error - values must be on a dyadic square of size {0}".format(2**div))
+                self.values = values
+            else:
+                self.values = np.zeros([2**self.div, 2**self.div])
+        else:            
+            if values is not None:
+                self.values = values
+                self.div = int(math.log(values.shape[0], 2))
+                if (values.shape[0] != values.shape[1] or values.shape[0] != 2**self.div):
+                    raise Exception("DyadicPWConstant: Error - values must be on a dyadic square, shape of {0} closest to div {1}".format(2**self.div, self.div))
+                self.x_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div-1)
+                self.y_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div-1)
+            elif func is not None:
+                raise Exception('DyadicPWLinear: Error - need grid size when specifying function')
 
-        self.values = values
-        
-        # This grid is in the centers of the dyadic squares
-        self.x_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div - 1)
-        self.y_grid = np.linspace(0.0, 1.0, 2**self.div, endpoint=False) + 2.0**(-self.div - 1)
+    def dot(self, f, space='L2'):
+        if isinstance(f, type(self)):
+            if space == 'L2':
+                return self.L2_dot(f)
+            elif space == 'H1':
+                return self.L2_dot(f)
+            else:
+                raise Exception('Unrecognised Hilbert space norm ' + space)
+        elif isinstance(f, DyadicPWLinear):
+            return f.dot(self)
+        else:
+            raise Exception('Dot product can only be between compatible dyadic functions')
+
+    def L2_dot(self, f):
+
+        u, v = match
 
     def interpolate(self, div):
         # The field is defined to be constant on the dyadic squares
@@ -112,13 +148,25 @@ class DyadicPWConstant(object):
         # finer mesh level, so that we can apply it in to the system easily
         
         if div >= self.div:
-            return self.values.repeat(2**(div - self.div), axis=0).repeat(2**(div - self.div), axis=1)
+            return self.values.repeat(2**(div-self.div), axis=0).repeat(2**(div-self.div), axis=1)
         else:
             raise Exception('DyadicPWConstant: Interpolate div must be greater than or equal to field div')
 
     #TODO: Implement L2 and H1 with itself *AND* with the PW linear functions...
+   
+    def match_grids(self, f):
+        """ Check the dyadic division of f and adjust the coarser one,
+            which we do through linear interpolation, returns two functions
+            matched, with necessary interpolation, and the division
+            level to which we interpolated """
 
-    
+        if self.div == f.div:
+            return self.values, f.values, self.div
+        if self.div > f.div:
+            return self.values, f.interpolate(self.div), self.div
+        if self.div < f.div:
+            return self.interpolate(f.div), f.values, f.div
+
     def plot(self, ax, title=None, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
 
         # We do some tricks here (i.e. using np.repeat) to plot the piecewise constant nature of the random field...
@@ -175,12 +223,24 @@ class DyadicPWLinear(object):
             # interpolation... but maybe we don't want that either
 
     def dot(self, f, space='L2'):
-        if space == 'L2':
-            return self.L2_dot(f)
-        elif space == 'H1':
-            return self.H1_dot(f)
+        if isinstance(f, type(self)):
+            if space == 'L2':
+                return self.L2_dot(f)
+            elif space == 'H1':
+                return self.H1_dot(f)
+            else:
+                raise Exception('Unrecognised Hilbert space norm ' + space)
+        elif isinstance(f, DyadicPWConstant):
+            if space == 'L2':
+                return self.L2_pwconst_dot(f)
+            elif space == 'H1':
+                # H1 norm between pw constant function same as L2 as first deriv is 0
+                # almost everywhere...
+                return self.L2_pwconst_dot(f)
+            else:
+                raise Exception('Unrecognised Hilbert space norm ' + space)
         else:
-            raise Exception('Unrecognised Hilbert space norm ' + space)
+            raise Exception('Dot product can only be between compatible dyadic functions')
 
     def norm(self, space='L2'):
         return self.dot(self, space)
@@ -256,6 +316,23 @@ class DyadicPWLinear(object):
                                                     +u[i+1,j]*v[i,j+1] + u[i,j+1]*v[i+1,j]) ) """
 
         return h * h * dot / 12
+
+    def L2_pwconst_dot(self, f):
+        """ Compute the L2 dot product with a DyadicPWConstant function,
+            automatically interpolates the coarser function """
+        
+        # NB that the v field is the piecewise constant function
+        u, v, match_div = self.match_grids(f)
+
+        h = 2.0**(-match_div)
+    
+        # Top left triangle
+        dot = ((u[:-1,:-1] + u[1:,:-1] + u[:-1,1:]) * v).sum()
+        # Bottom left triangle
+        dot += ((u[1:,1:] + u[1:,:-1] + u[:-1,1:]) * v).sum()
+
+        return h * h * dot / 6 
+
 
     def match_grids(self, f):
         """ Check the dyadic division of f and adjust the coarser one,
@@ -375,7 +452,6 @@ class Basis(object):
         self.G = None
 
     def dot(self, u):
-        # NB we can overide the norm to get different projections if ew want
         u_d = np.zeros(self.n)
         for i, v in enumerate(self.vecs):
             u_d[i] = v.dot(u, self.space)
@@ -386,6 +462,9 @@ class Basis(object):
         for i in range(self.n):
             for j in range(i+1):
                 self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.space)
+
+    def cross_grammian(self, other):
+        raise Exception('Only implemented for orthonomal bases') 
 
     def project(self, u):
         
@@ -435,11 +514,22 @@ class OrthonormalBasis(Basis):
         # Now that the system is orthonormal, we don't need to solve a linear system
         # to make the projection
         y_n = self.dot(u)
-        return type(self.vecs[0])((y_n * self.values_flat).sum(axis=2)) 
+        return type(self.vecs[0])((y_n * self.values_flat).sum(axis=2))
 
     def orthonormalise(self):
         return self
 
+    def cross_grammian(self, other):
+        if not isinstance(other, OrthonormalBasis):
+            raise Exception('Only implemented for two orthonormal bases!')
+
+        CG = np.zeros([self.n, other.n])
+
+        for i in range(self.n):
+            for j in range(other.n):
+                CG[i,j] = self.vecs[i].dot(other.vecs[j], self.space)
+        return CG
+    
 
 def make_hat_basis(div, space='L2'):
     # Makes a complete hat basis for division div
