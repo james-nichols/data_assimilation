@@ -140,7 +140,9 @@ class DyadicPWConstant(object):
 
     def L2_dot(self, f):
 
-        u, v = match
+        u, v, match_div = self.match_grids(f)
+
+        return (u * v).sum() * 2**(-2 * match_div)
 
     def interpolate(self, div):
         # The field is defined to be constant on the dyadic squares
@@ -240,6 +242,7 @@ class DyadicPWLinear(object):
             else:
                 raise Exception('Unrecognised Hilbert space norm ' + space)
         else:
+            pdb.set_trace()
             raise Exception('Dot product can only be between compatible dyadic functions')
 
     def norm(self, space='L2'):
@@ -464,7 +467,12 @@ class Basis(object):
                 self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.space)
 
     def cross_grammian(self, other):
-        raise Exception('Only implemented for orthonomal bases') 
+        CG = np.zeros([self.n, other.n])
+        
+        for i in range(self.n):
+            for j in range(other.n):
+                CG[i,j] = self.vecs[i].dot(other.vecs[j], self.space)
+        return CG
 
     def project(self, u):
         
@@ -518,18 +526,6 @@ class OrthonormalBasis(Basis):
 
     def orthonormalise(self):
         return self
-
-    def cross_grammian(self, other):
-        if not isinstance(other, OrthonormalBasis):
-            raise Exception('Only implemented for two orthonormal bases!')
-
-        CG = np.zeros([self.n, other.n])
-
-        for i in range(self.n):
-            for j in range(other.n):
-                CG[i,j] = self.vecs[i].dot(other.vecs[j], self.space)
-        return CG
-    
 
 def make_hat_basis(div, space='L2'):
     # Makes a complete hat basis for division div
@@ -596,6 +592,10 @@ def make_approx_basis(fem_div, field_div, low_point=0.01, space='L2'):
             V_n.append(fem.u)
 
     return Basis(V_n, space=space), fields
+
+def make_local_measurements_basis(div):
+
+    pass
 
 class Measurements(object):
     """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
