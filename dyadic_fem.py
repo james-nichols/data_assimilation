@@ -61,7 +61,7 @@ class DyadicFEMSolver(object):
         self.h = 1.0 / (self.n_side + 1)
 
         # Makes an appropriate sized field for our FEM grid
-        a = rand_field.field.interpolate(self.div)
+        a = rand_field.field.interpolate(self.div).values
         
         # Now we make the various diagonals
         diag = 2.0 * (a[:-1, :-1] + a[:-1,1:] + a[1:,:-1] + a[1:, 1:]).flatten()
@@ -125,34 +125,39 @@ class DyadicPWConstant(object):
             elif func is not None:
                 raise Exception('DyadicPWLinear: Error - need grid size when specifying function')
 
-    def dot(self, f, space='L2'):
-        if isinstance(f, type(self)):
+    def dot(self, other, space='L2'):
+        if isinstance(other, type(self)):
             if space == 'L2':
-                return self.L2_dot(f)
+                return self.L2_dot(other)
             elif space == 'H1':
-                return self.L2_dot(f)
+                return self.L2_dot(other)
             else:
                 raise Exception('Unrecognised Hilbert space norm ' + space)
-        elif isinstance(f, DyadicPWLinear):
-            return f.dot(self)
+        elif isinstance(other, DyadicPWLinear):
+            return other.dot(self)
         else:
             raise Exception('Dot product can only be between compatible dyadic functions')
 
-    def L2_dot(self, f):
+    def L2_dot(self, other):
 
-        u, v, match_div = self.match_grids(f)
+        d = max(self.div, other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
 
-        return (u * v).sum() * 2**(-2 * match_div)
+        return (u.values * v.values).sum() * 2**(-2 * d)
 
     def interpolate(self, div):
         # The field is defined to be constant on the dyadic squares
         # so here we generate a matrix of the values on all the dyadic squares at the
         # finer mesh level, so that we can apply it in to the system easily
         
-        if div >= self.div:
-            return self.values.repeat(2**(div-self.div), axis=0).repeat(2**(div-self.div), axis=1)
-        else:
+        if div < self.div:
             raise Exception('DyadicPWConstant: Interpolate div must be greater than or equal to field div')
+        elif div == self.div:
+            return self
+        else:
+            return DyadicPWConstant(values=self.values.repeat(2**(div-self.div), axis=0).repeat(2**(div-self.div), axis=1),
+                                    div=div)
 
     #TODO: Implement L2 and H1 with itself *AND* with the PW linear functions...
    
@@ -183,6 +188,83 @@ class DyadicPWConstant(object):
             ax.set_ylabel('$y$')
         if title is not None:
             ax.set_title(title)
+
+    # Here we overload the + += - -= * and / operators
+    
+    def __add__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWConstant(u.values + v.values, d)
+        if isinstance(other, DyadicPWLinear):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWHybrid(l_values=v.values, c_values=u.values, div=d)
+        else:
+            return DyadicPWConstant(self.values + other, self.div)
+
+    __radd__ = __add__
+
+    def __iadd__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            self.div = d
+            self.values = u.values + v.values
+        else:
+            self.values = self.values + other
+        return self
+        
+    def __sub__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWConstant(u.values - v.values, d)
+        if isinstance(other, DyadicPWLinear):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWHybrid(l_values=-v.values, c_values=u.values, div=d)        
+        else:
+            return DyadicPWConstant(self.values - other, self.div)
+    __rsub__ = __sub__
+
+    def __isub__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            self.div = d
+            self.values = u.values - v.values
+        else:
+            self.values = self.values - other
+        return self
+
+    def __mul__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWConstant(u.values * v.values, d)
+        else:
+            return DyadicPWConstant(self.values * other, self.div)
+    __rmul__ = __mul__
+
+    def __pow__(self,power):
+        return DyadicPWConstant(self.values**power, self.div)
+
+    def __truediv__(self,other):
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWConstant(u.values / v.values, d)
+        else:
+            return DyadicPWConstant(self.values / other, self.div)
 
 class DyadicPWLinear(object):
     """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
@@ -224,38 +306,39 @@ class DyadicPWLinear(object):
             # TODO: keep the function so we can do a proper interpolation, not just a linear
             # interpolation... but maybe we don't want that either
 
-    def dot(self, f, space='L2'):
-        if isinstance(f, type(self)):
+    def dot(self, other, space='L2'):
+        if isinstance(other, type(self)):
             if space == 'L2':
-                return self.L2_dot(f)
+                return self.L2_dot(other)
             elif space == 'H1':
-                return self.H1_dot(f)
+                return self.H1_dot(other)
             else:
                 raise Exception('Unrecognised Hilbert space norm ' + space)
-        elif isinstance(f, DyadicPWConstant):
+        elif isinstance(other, DyadicPWConstant):
             if space == 'L2':
-                return self.L2_pwconst_dot(f)
+                return self.L2_pwconst_dot(other)
             elif space == 'H1':
                 # H1 norm between pw constant function same as L2 as first deriv is 0
                 # almost everywhere...
-                return self.L2_pwconst_dot(f)
+                return self.L2_pwconst_dot(other)
             else:
                 raise Exception('Unrecognised Hilbert space norm ' + space)
         else:
-            pdb.set_trace()
             raise Exception('Dot product can only be between compatible dyadic functions')
 
     def norm(self, space='L2'):
         return self.dot(self, space)
     
-    def H1_dot(self, f):
+    def H1_dot(self, other):
         """ Compute the H1_0 dot product with another DyadicPWLinear function
             automatically interpolates the coarser function """
 
-        u, v, match_div = self.match_grids(f)
+        d = max(self.div,other.div)
+        u = self.interpolate(d).values
+        v = other.interpolate(d).values
 
-        h = 2.0**(-match_div)
-        n_side = 2**match_div
+        h = 2.0**(-d)
+        n_side = 2**d
 
         # This is du/dy
         p = 2 * np.ones([n_side, n_side+1])
@@ -268,13 +351,15 @@ class DyadicPWLinear(object):
         
         return 0.5 * dot + self.L2_inner(u,v,h)
 
-    def L2_dot(self, f):
+    def L2_dot(self, other):
         """ Compute the L2 dot product with another DyadicPWLinear function,
             automatically interpolates the coarser function """
         
-        u, v, match_div = self.match_grids(f)
-
-        h = 2.0**(-match_div)
+        d = max(self.div,other.div)
+        u = self.interpolate(d).values
+        v = other.interpolate(d).values
+        
+        h = 2.0**(-d)
 
         return self.L2_inner(u,v,h)
 
@@ -320,21 +405,23 @@ class DyadicPWLinear(object):
 
         return h * h * dot / 12
 
-    def L2_pwconst_dot(self, f):
+    def L2_pwconst_dot(self, other):
         """ Compute the L2 dot product with a DyadicPWConstant function,
             automatically interpolates the coarser function """
         
         # NB that the v field is the piecewise constant function
-        u, v, match_div = self.match_grids(f)
-
-        h = 2.0**(-match_div)
+        d = max(self.div, other.div)
+        u = self.interpolate(d).values
+        v = other.interpolate(d).values
+        
+        h = 2.0**(-d)
     
         # Top left triangle
         dot = ((u[:-1,:-1] + u[1:,:-1] + u[:-1,1:]) * v).sum()
         # Bottom left triangle
         dot += ((u[1:,1:] + u[1:,:-1] + u[:-1,1:]) * v).sum()
 
-        return h * h * dot / 6 
+        return h * h * dot / 6
 
 
     def match_grids(self, f):
@@ -353,14 +440,14 @@ class DyadicPWLinear(object):
     def interpolate(self, interp_div):
         """ Simple interpolation routine to make this function on a finer division dyadic grid """
         
-        if (interp_div < self.div):
+        if interp_div < self.div:
             raise Exception("Interpolation division smaller than field division! Need to integrate")
-
-        interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.values, kind='linear')
-
-        x = y = np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True)
-        
-        return interp_func(x, y)
+        elif interp_div == self.div:
+            return self
+        else:
+            interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.values, kind='linear')
+            x = y = np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True)
+            return DyadicPWLinear(interp_func(x, y), interp_div)
 
     def plot(self, ax, title=None, div_frame=4, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
 
@@ -385,43 +472,63 @@ class DyadicPWLinear(object):
     
     def __add__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
-            return DyadicPWLinear(u + v, d)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWLinear(u.values + v.values, d)
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWHybrid(l_values=u.values, c_values=v.values, div=d)
         else:
-            return DyadicPWLinear(self.values * other, self.div)
+            return DyadicPWLinear(self.values + other, self.div)
 
     __radd__ = __add__
 
     def __iadd__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
             self.div = d
-            self.values = u + v
+            self.values = u.values + v.values
         else:
             self.values = self.values + other
         return self
         
     def __sub__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
-            return DyadicPWLinear(u - v, d)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWLinear(u.values - v.values, d)
+        if isinstance(other, DyadicPWConstant):
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWHybrid(l_values=u.values, c_values=-v.values, div=d)
         else:
-            return DyadicPWLinear(self.values * other, self.div)
+            return DyadicPWLinear(self.values - other, self.div)
     __rsub__ = __sub__
 
     def __isub__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
             self.div = d
-            self.values = u - v
+            self.values = u.values - v.values
         else:
             self.values = self.values - other
         return self
 
     def __mul__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
-            return DyadicPWLinear(u * v, d)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWLinear(u.values * v.values, d)
         else:
             return DyadicPWLinear(self.values * other, self.div)
     __rmul__ = __mul__
@@ -431,10 +538,189 @@ class DyadicPWLinear(object):
 
     def __truediv__(self,other):
         if isinstance(other, DyadicPWLinear):
-            u,v,d = self.match_grids(other)
-            return DyadicPWLinear(u / v, d)
+            d = max(self.div,other.div)
+            u = self.interpolate(d)
+            v = other.interpolate(d)
+            return DyadicPWLinear(u.values / v.values, d)
         else:
             return DyadicPWLinear(self.values / other, self.div)
+
+
+class DyadicPWHybrid(object):
+    """ Describes a piecewise linear function on a dyadic P1 tringulation of the unit cube.
+        Includes routines to calculate L2 and H1 dot products, and interpolate between different dyadic levels
+        """
+
+    def __init__(self, l_values=None, c_values=None, div=None):
+        
+        if div is not None:
+            self.div = div
+            self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+            self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+            
+            if l_values is not None:
+                if (l_values.shape[0] != l_values.shape[1] or l_values.shape[0] != 2**div + 1):
+                    raise Exception("DyadicPWHybrid: Error - values must be on a dyadic square of size {0}".format(2**div+1))
+                self.l_values = l_values
+            else:
+                self.l_values = np.zeros([2**self.div + 1, 2**self.div + 1])
+            if c_values is not None:
+                if (c_values.shape[0] != c_values.shape[1] or c_values.shape[0] != 2**div):
+                    raise Exception("DyadicPWHybrid: Error - values must be on a dyadic square of size {0}".format(2**div+1))
+                self.c_values = c_values
+            else:
+                self.c_values = np.zeros([2**self.div, 2**self.div])
+
+
+        else:
+            if l_values is not None:
+                self.l_values = l_values
+                self.div = int(math.log(l_values.shape[0] - 1, 2))
+                if (l_values.shape[0] != l_values.shape[1] or l_values.shape[0] != 2**self.div + 1):
+                    raise Exception("DyadicPWHybrid: Error - linear values must be on a dyadic square, shape of {0} closest to div {1}".format(2**self.div+1, self.div))
+                self.x_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+                self.y_grid = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint=True)
+            elif c_values is not None:
+                self.c_values = c_values
+                self.div = int(math.log(c_values.shape[0], 2))
+                if (c_values.shape[0] != c_values.shape[1] or c_values.shape[0] != 2**self.div):
+                    raise Exception("DyadicPWHybrid: Error - constant values must be on a dyadic square, shape of {0} closest to div {1}".format(2**self.div, self.div))
+            else:
+                raise Exception("DyadicPWHybrid: Need either div or field values to inisialise!")
+
+    def match_grids(self, f):
+        """ Check the dyadic division of f and adjust the coarser one,
+            which we do through linear interpolation, returns two functions
+            matched, with necessary interpolation, and the division
+            level to which we interpolated """
+
+        if self.div == f.div:
+            return self, f, self.div
+        if self.div > f.div:
+            return self, f.interpolate(self.div), self.div
+        if self.div < f.div:
+            return self.interpolate(f.div), f, f.div
+
+    def interpolate(self, interp_div):
+        """ Simple interpolation routine to make this function on a finer division dyadic grid """
+        
+        if interp_div < self.div:
+            raise Exception("Interpolation division smaller than field division! Need to integrate")
+        elif interp_dif == self.div:
+            return self
+        else:
+            const = self.c_values.repeat(2**(div-self.div), axis=0).repeat(2**(div-self.div), axis=1)
+            interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.l_values, kind='linear')
+            x = y = np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True)
+            return DyadicPWHybrid(l_values = interp_func(x, y), c_values = const, div = interp_div)
+
+    def plot(self, ax, title=None, div_frame=4, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
+
+
+
+        # We do some tricks here (i.e. using np.repeat) to plot the piecewise constant nature of the random field...
+        x = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint = True).repeat(2)[1:-1]
+        xs, ys = np.meshgrid(x, x)
+
+        rpts = np.ones(self.l_values.shape[0], dtype='int')
+        rpts[1:-1] = 2
+        plottable = self.c_values.repeat(2, axis=0).repeat(2, axis=1) + self.l_values.repeat(rpts, axis=0).repeat(rpts, axis=1)
+
+        if self.div > div_frame:
+            wframe = ax.plot_surface(xs, ys, plottable, cstride=2**(self.div - div_frame), rstride=2**(self.div-div_frame), 
+                                     cmap=cmap, alpha=alpha)
+        else:
+            wframe = ax.plot_surface(xs, ys, plottable, cstride=1, rstride=1, cmap=cmap, alpha=alpha)
+
+        ax.set_axis_bgcolor('white')
+        if show_axes_labels:
+            ax.set_xlabel('$x$')
+            ax.set_ylabel('$y$')
+        if title is not None:
+            ax.set_title(title)
+
+    # Here we overload the + += - -= * and / operators
+    def __add__(self, other):
+        d = max(self.div,other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
+        if isinstance(other, DyadicPWHybrid):
+            return DyadicPWHybrid(l_values = u.l_values + v.l_values, 
+                                  c_values = u.c_values + v.c_values, div=d)
+        if isinstance(other, DyadicPWLinear):
+            return DyadicPWHybrid(l_values = u.l_values + v.values, c_values = u.c_values, div = d)
+        if isinstance(other, DyadicPWConstant):
+            return DyadicPWHybrid(l_values = u.l_values, c_values = u.c_values + v.values, div = d)
+        else:
+            raise Exception('DyadicPWHybrid operator not suported for that type')
+
+    __radd__ = __add__
+
+    def __iadd__(self, other):
+        d = max(self.div,other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
+        if isinstance(other, DyadicPWHybrid):
+            self.l_values = u.l_values + v.l_values 
+            self.c_values = u.c_values + v.c_values
+            self.div = d
+        if isinstance(other, DyadicPWLinear):
+            self.l_values = u.l_values + v.values
+            self.c_values = u.c_values
+            self.div = d
+        if isinstance(other, DyadicPWConstant):
+            self.l_values = u.l_values
+            self.c_values = u.c_values + v.values
+            self.div = d
+        else:
+            raise Exception('DyadicPWHybrid operator not suported for that type')
+        return self
+        
+    def __sub__(self,other):
+        d = max(self.div,other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
+        if isinstance(other, DyadicPWHybrid):
+            return DyadicPWHybrid(l_values = u.l_values - v.l_values, 
+                                  c_values = u.c_values - v.c_values, div=d)
+        if isinstance(other, DyadicPWLinear):
+            return DyadicPWHybrid(l_values = u.l_values - v.values, c_values = u.c_values, div = d)
+        if isinstance(other, DyadicPWConstant):
+            return DyadicPWHybrid(l_values = u.l_values, c_values = u.c_values - v.values, div = d)
+        else:
+            raise Exception('DyadicPWHybrid operator not suported for that type')
+
+    __rsub__ = __sub__
+
+    def __isub__(self,other):   
+        d = max(self.div,other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
+        if isinstance(other, DyadicPWHybrid):
+            self.l_values = u.l_values - v.l_values 
+            self.c_values = u.c_values - v.c_values
+            self.div = d
+        if isinstance(other, DyadicPWLinear):
+            self.l_values = u.l_values - v.values
+            self.c_values = u.c_values
+            self.div = d
+        if isinstance(other, DyadicPWConstant):
+            self.l_values = u.l_values
+            self.c_values = u.c_values - v.values
+            self.div = d
+        else:
+            raise Exception('DyadicPWHybrid operator not suported for that type')
+        return self
+
+    def __mul__(self,other):
+        return DyadicPWHybrid(l_values = self.l_values * other, c_values = self.c_values * other, div = self.div)
+    __rmul__ = __mul__
+
+    def __pow__(self,power):
+        raise Exception('DyadicPWHybrid: Exponentiation makes no sense')
+
+    def __truediv__(self,other):
+        return DyadicPWHybrid(l_values = self.l_values / other, c_values = self.c_values / other, div = self.div)
 
 class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
@@ -489,9 +775,15 @@ class Basis(object):
             # We allow the projection to be of the same type 
             # Also create it from the simple broadcast and sum (which surely should
             # be equivalent to some tensor product thing??)
-            u_p = type(self.vecs[0])((y_n * self.values_flat).sum(axis=2)) 
+            #u_p = type(self.vecs[0])((y_n * self.values_flat).sum(axis=2)) 
         
-            return u_p
+            return self.reconstruct(y_n)
+
+    def reconstruct(self, c):
+        # Build a function from a vector of coefficients
+        
+        u_p = type(self.vecs[0])((c * self.values_flat).sum(axis=2)) 
+        return u_p
 
     def orthonormalise(self):
 
