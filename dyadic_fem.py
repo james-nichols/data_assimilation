@@ -22,31 +22,16 @@ class ConstantField(object):
         self.c = c
         self.field = DyadicPWConstant(c * np.ones([2,2]), 1)
     
-class DyadicRandomField(object):
-    """ Creates a random field on a dyadic subdivision of the unit cube """
+def make_dyadic_random_field(div, a_bar, c, seed=None):
+    # div is the subdivision power, not number
 
-    def __init__(self, div, a_bar, c, seed=None):
-        # div is the subdivision power, not number
+    n_side = 2**div
 
-        self.div = div
-        self.n_side = 2**div
+    if seed is not None:
+        np.random.seed(seed)
+    
+    return DyadicPWConstant(a_bar + c * (2.0 * np.random.random([n_side, n_side]) - 1.0), div)
 
-        if seed is not None:
-            np.random.seed(seed)
-        self.field = DyadicPWConstant(a_bar + c * (2.0 * np.random.random([self.n_side, self.n_side]) - 1.0), self.div)
-        
-    def make_fem_field(self, fem_div):
-        # The field is defined to be constant on the dyadic squares
-        # so here we generate a matrix of the values on all the dyadic squares at the
-        # FEM mesh level, so that we can apply it in to the system easily
-        
-        fem_field = self.field.repeat(2**(fem_div - self.div), axis=0).repeat(2**(fem_div - self.div), axis=1)
-
-        return fem_field
-
-    def make_fem_field_flat(self, fem_div):
-        # Just flatten!
-        fem_field_flat = self.make_fem_field(fem_div).flatten()
 
 class DyadicFEMSolver(object):
     """ Solves the -div( a nabla u ) = f PDE on a grid, with a given by 
@@ -61,7 +46,7 @@ class DyadicFEMSolver(object):
         self.h = 1.0 / (self.n_side + 1)
 
         # Makes an appropriate sized field for our FEM grid
-        a = rand_field.field.interpolate(self.div).values
+        a = rand_field.interpolate(self.div).values
         
         # Now we make the various diagonals
         diag = 2.0 * (a[:-1, :-1] + a[:-1,1:] + a[1:,:-1] + a[1:, 1:]).flatten()
@@ -848,38 +833,38 @@ def make_sine_basis(div, N, M, space='L2'):
 
     return Basis(V_n, space=space)
 
-def make_random_approx_basis(N, fem_div, field_div, space='L2', a_bar=1.0, c=0.5, seed=None):
+def make_random_approx_basis(N, div, width=2, space='L2', a_bar=1.0, c=0.5, seed=None):
     # Make a basis of N solutions to the FEM problem, from random generated fields
-
-    if (field_div > fem_div):
-        raise Exception('Dyadic subdivision for FEM solution must be larger than for the random field')
 
     V_n = []
     fields = []
+    locs_i = np.random.choice(2**div - (width-1), N, replace=False)
+    locs_j = np.random.choice(2**div - (width-1), N, replace=False)
     for n in range(N):
-        a = DyadicRandomField(div=field_div, a_bar=a_bar, c=c, seed=seed)
+        #a = make_dyadic_random_field(div=div, a_bar=a_bar, c=c, seed=seed)
+        a = DyadicPWConstant(div=div)
+        a.values[:,:] = a_bar 
+        a.values[locs_i[n]:locs_i[n]+width, locs_j[n]:locs_j[n]+width] = a_bar - c
         fields.append(a)
-        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+        fem = DyadicFEMSolver(div=div, rand_field=a, f=1.0)
         fem.solve()
         V_n.append(fem.u)
 
     return Basis(V_n, space=space), fields
 
 
-def make_approx_basis(fem_div, field_div, low_point=0.01, space='L2'):
+def make_approx_basis(div, low_point=0.01, space='L2'):
     # Make it out of a few solutions FE
-    if (field_div > fem_div):
-        raise Exception('Dyadic subdivision for FEM solution must be larger than for the random field')
-
-    side_n = 2**field_div
+    side_n = 2**div
     V_n = []
     fields = []
-    for i in range(side_n):
-        for j in range(side_n):
-            a = DyadicRandomField(div=field_div, a_bar=1.0, c=0.0, seed=None)
-            a.field.values[i,j] = low_point
+    for i in range(side_n-1):
+        for j in range(side_n-1):
+            a = DyadicPWConstant(div=div)
+            a.values[:,:] = 1.0
+            a.values[i:i+2,j:j+2] = low_point
             fields.append(a)
-            fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+            fem = DyadicFEMSolver(div=div, rand_field=a, f=1.0)
             fem.solve()
             V_n.append(fem.u)
 
