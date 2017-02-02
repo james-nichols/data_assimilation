@@ -819,8 +819,13 @@ def make_hat_basis(div, space='L2'):
 
     return Basis(V_n, space=space)
 
-def make_sine_basis(div, N, M, space='L2'):
+def make_sine_basis(div, N=None, M=None, space='L2'):
     V_n = []
+
+    if N is None:
+        N = 2**div - 1
+    if M is None:
+        M = 2**div - 1
     # n is the number of internal grid points, i.e. we will have n different hat functionsdd
     # for our coarse-grid basis
 
@@ -833,18 +838,18 @@ def make_sine_basis(div, N, M, space='L2'):
 
     return Basis(V_n, space=space)
 
-def make_random_approx_basis(N, div, width=2, space='L2', a_bar=1.0, c=0.5, seed=None):
-    # Make a basis of N solutions to the FEM problem, from random generated fields
+def make_random_approx_basis(m, div, width=2, space='L2', a_bar=1.0, c=0.5, seed=None):
+    # Make a basis of m solutions to the FEM problem, from random generated fields
 
     V_n = []
     fields = []
-    locs_i = np.random.choice(2**div - (width-1), N, replace=False)
-    locs_j = np.random.choice(2**div - (width-1), N, replace=False)
-    for n in range(N):
+    locs_i = np.random.choice(2**div - (width-1), m, replace=True)
+    locs_j = np.random.choice(2**div - (width-1), m, replace=True)
+    for i in range(m):
         #a = make_dyadic_random_field(div=div, a_bar=a_bar, c=c, seed=seed)
         a = DyadicPWConstant(div=div)
         a.values[:,:] = a_bar 
-        a.values[locs_i[n]:locs_i[n]+width, locs_j[n]:locs_j[n]+width] = a_bar - c
+        a.values[locs_i[i]:locs_i[i]+width, locs_j[i]:locs_j[i]+width] = a_bar - c
         fields.append(a)
         fem = DyadicFEMSolver(div=div, rand_field=a, f=1.0)
         fem.solve()
@@ -870,16 +875,32 @@ def make_approx_basis(div, low_point=0.01, space='L2'):
 
     return Basis(V_n, space=space), fields
 
-def make_local_measurements_basis(div):
+def make_random_local_measurements_basis(m, div, width=2):
 
-    pass
+    M_m = []
+    locs_i = np.random.choice(2**div - (width-1), m, replace=True)
+    locs_j = np.random.choice(2**div - (width-1), m, replace=True)
+    for i in range(m):
+        h = 2**(-div)
+        meas = DyadicPWConstant(div=div)
+        meas.values[locs_i[i]:locs_i[i]+width,locs_j[i]:locs_j[i]+width] = 1.0 / (width*width*h*h)
+            
+        M_m.append(meas)
+    W = Basis(M_m, 'H1')
+    return W
 
-class Measurements(object):
-    """ A measurement of the solution u of the PDE / FEM solution, in some linear subspace W """
+def optimal_reconstruction(W, V_n, w):
+    """ And here it is - the optimal """
+    G = W.cross_grammian(V_n)
+    #w = W.dot(u)
+    c = np.linalg.solve(G.T @ G, G.T @ w)
 
-class RandomPointMeasurements(Measurements):
+    v_star = V_n.reconstruct(c)
 
-    def __init__(self, i, j):
-        self.i = i
-        self.j = j
+    u_star = v_star + W.reconstruct(w - W.dot(v_star))
+
+    # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
+    # iff W is orthonormal...
+    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star))
+
 
