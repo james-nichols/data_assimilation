@@ -843,13 +843,17 @@ def make_random_approx_basis(m, div, width=2, space='L2', a_bar=1.0, c=0.5, seed
 
     V_n = []
     fields = []
-    locs_i = np.random.choice(2**div - (width-1), m, replace=True)
-    locs_j = np.random.choice(2**div - (width-1), m, replace=True)
+
+    points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
+    locs = np.random.choice(range(len(points)), m, replace=False)
+
     for i in range(m):
         #a = make_dyadic_random_field(div=div, a_bar=a_bar, c=c, seed=seed)
         a = DyadicPWConstant(div=div)
         a.values[:,:] = a_bar 
-        a.values[locs_i[i]:locs_i[i]+width, locs_j[i]:locs_j[i]+width] = a_bar - c
+
+        point = points[locs[i]]
+        a.values[point[0]:point[0]+width, point[1]:point[1]+width] = a_bar - c
         fields.append(a)
         fem = DyadicFEMSolver(div=div, rand_field=a, f=1.0)
         fem.solve()
@@ -878,21 +882,25 @@ def make_approx_basis(div, low_point=0.01, space='L2'):
 def make_random_local_measurements_basis(m, div, width=2):
 
     M_m = []
-    locs_i = np.random.choice(2**div - (width-1), m, replace=True)
-    locs_j = np.random.choice(2**div - (width-1), m, replace=True)
+    
+    points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
+    locs = np.random.choice(range(len(points)), m, replace=False)
+    h = 2**(-div)
     for i in range(m):
-        h = 2**(-div)
+        point = points[locs[i]]
         meas = DyadicPWConstant(div=div)
-        meas.values[locs_i[i]:locs_i[i]+width,locs_j[i]:locs_j[i]+width] = 1.0 / (width*width*h*h)
+        meas.values[point[0]:point[0]+width,point[1]:point[1]+width] = 1.0 / (width*width*h*h)
             
         M_m.append(meas)
     W = Basis(M_m, 'H1')
     return W
 
-def optimal_reconstruction(W, V_n, w):
+def optimal_reconstruction(W, V_n, w, disp_cond=False):
     """ And here it is - the optimal """
     G = W.cross_grammian(V_n)
     #w = W.dot(u)
+    if disp_cond:
+        print('Condition number of G.T * G = {0}'.format(np.linalg.cond(G.T @ G)))
     c = np.linalg.solve(G.T @ G, G.T @ w)
 
     v_star = V_n.reconstruct(c)
