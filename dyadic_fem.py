@@ -123,6 +123,9 @@ class DyadicPWConstant(object):
         else:
             raise Exception('Dot product can only be between compatible dyadic functions')
 
+    def norm(self, space='L2'):
+        return self.dot(self, space)
+    
     def L2_dot(self, other):
 
         d = max(self.div, other.div)
@@ -586,22 +589,76 @@ class DyadicPWHybrid(object):
         if self.div < f.div:
             return self.interpolate(f.div), f, f.div
 
+    def norm(self, space='L2'):
+        return self.dot(self, space)
+
+    def dot(self, other, space='L2'):
+        return 0.0
+    
+
+    def L2_dot(self, other):
+        """ Compute the L2 dot product with another DyadicPWLinear function,
+            automatically interpolates the coarser function """
+        
+        d = max(self.div,other.div)
+        u = self.interpolate(d)
+        v = other.interpolate(d)
+
+        
+
+        return self.L2_inner(u.l_values, v.l_values, u.c_values, v.c_values, d)
+
+    def L2_inner(self, u, v, p, q, d):
+        # u and v are linear values on the same grid / triangulation, 
+        # while p and q are the constant values
+
+        h = 2.0**(-d)
+
+        # We must repeat all internal points twice in the linear fields
+        t_u = u.repeat(2, axis=0).repeat(2, axis=1)[1:-1,1:-1] + p.repeat(2, axis=0).repeat(2, axis=1)
+        t_v = v.repeat(2, axis=0).repeat(2, axis=1)[1:-1,1:-1] + q.repeat(2, axis=0).repeat(2, axis=1)
+
+        # Now we can do a calculation a bit like the one for the PW linear function, but with a stride
+        # which we include in the point adjacency matrix
+        p = np.tile([[1,2],[2,1]], (2**d, 2**d))
+
+        # the point adjacency matrix
+        p = 6 * np.ones(u.shape)
+        p[:,0] = p[0,:] = p[:,-1] = p[-1,:] = 3
+        p[0,0] = p[-1,-1] = 1
+        p[0,-1] = p[-1, 0] = 2 
+        dot = (u * v * p).sum()
+        
+        # Now add all the vertical edges
+        p = 2 * np.ones([u.shape[0]-1, u.shape[1]])
+        p[0,:] = p[-1,:] = 1
+        dot = dot + ((u[1:,:] * v[:-1,:] + u[:-1,:] * v[1:,:]) * p * 0.5).sum()
+
+        # Now add all the horizontal edges
+        p = 2 * np.ones([u.shape[0], u.shape[1]-1])
+        p[:,0] = p[:,-1] = 1
+        dot = dot + ((u[:,1:] * v[:,:-1] + u[:,:-1] * v[:,1:]) * p * 0.5).sum()
+
+        # Finally all the diagonals (note every diagonal is adjacent to two triangles,
+        # so don't need p)
+        dot = dot + (u[:-1,1:] * v[1:,:-1] + u[1:,:-1] * v[:-1,1:] ).sum()
+
+        return h * h * dot / 12
+
     def interpolate(self, interp_div):
         """ Simple interpolation routine to make this function on a finer division dyadic grid """
         
         if interp_div < self.div:
             raise Exception("Interpolation division smaller than field division! Need to integrate")
-        elif interp_dif == self.div:
+        elif interp_div == self.div:
             return self
         else:
-            const = self.c_values.repeat(2**(div-self.div), axis=0).repeat(2**(div-self.div), axis=1)
+            const = self.c_values.repeat(2**(interp_div-self.div), axis=0).repeat(2**(interp_div-self.div), axis=1)
             interp_func = scipy.interpolate.interp2d(self.x_grid, self.y_grid, self.l_values, kind='linear')
             x = y = np.linspace(0.0, 1.0, 2**interp_div + 1, endpoint=True)
             return DyadicPWHybrid(l_values = interp_func(x, y), c_values = const, div = interp_div)
 
     def plot(self, ax, title=None, div_frame=4, alpha=0.5, cmap=cm.jet, show_axes_labels=True):
-
-
 
         # We do some tricks here (i.e. using np.repeat) to plot the piecewise constant nature of the random field...
         x = np.linspace(0.0, 1.0, 2**self.div + 1, endpoint = True).repeat(2)[1:-1]
@@ -838,6 +895,21 @@ def make_sine_basis(div, N=None, M=None, space='L2'):
 
     return Basis(V_n, space=space)
 
+def make_random_basis(n, field_div, fem_div, space='L2', a_bar=1.0, c=0.5):
+    # Make a basis of m solutions to the FEM problem, from random generated fields
+
+    V_n = []
+    fields = []
+
+    for i in range(n):
+        a = make_dyadic_random_field(div=field_div, a_bar=a_bar, c=c)
+        fields.append(a)
+        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+        fem.solve()
+        V_n.append(fem.u)
+
+    return Basis(V_n, space=space), fields
+
 def make_random_approx_basis(m, div, width=2, space='L2', a_bar=1.0, c=0.5, seed=None):
     # Make a basis of m solutions to the FEM problem, from random generated fields
 
@@ -899,8 +971,6 @@ def optimal_reconstruction(W, V_n, w, disp_cond=False):
     """ And here it is - the optimal """
     G = W.cross_grammian(V_n)
     #w = W.dot(u)
-    if disp_cond:
-        print('Condition number of G.T * G = {0}'.format(np.linalg.cond(G.T @ G)))
     c = np.linalg.solve(G.T @ G, G.T @ w)
 
     v_star = V_n.reconstruct(c)
@@ -909,6 +979,11 @@ def optimal_reconstruction(W, V_n, w, disp_cond=False):
 
     # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
     # iff W is orthonormal...
+    if disp_cond:
+        cond = np.linalg.cond(G.T @ G)
+        print('Condition number of G.T * G = {0}'.format(cond))
+        return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
+        
     return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star))
 
 
