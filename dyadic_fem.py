@@ -951,21 +951,75 @@ def make_approx_basis(div, low_point=0.01, space='L2'):
 
     return Basis(V_n, space=space), fields
 
-def make_random_local_measurements_basis(m, div, width=2):
+def make_random_local_integration_basis(m, div, width=2, space='L2'):
 
     M_m = []
     
     points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
     locs = np.random.choice(range(len(points)), m, replace=False)
     h = 2**(-div)
+
+    stencil = h*h*3.0 * np.ones([width, width])
+    stencil[0,:]=stencil[-1,:]=stencil[:,0]=stencil[:,-1]=h*h*3.0/2.0
+    stencil[0,0]=stencil[-1,-1]=h*h/2.0
+    stencil[0,-1]=stencil[-1,0]=h*h
+
+    if space == 'H1':
+        hat_b = make_hat_basis(div=div, space='H1')
+        hat_b.make_grammian()
+
     for i in range(m):
         point = points[locs[i]]
-        meas = DyadicPWConstant(div=div)
-        meas.values[point[0]:point[0]+width,point[1]:point[1]+width] = 1.0 / (width*width*h*h)
+        meas = DyadicPWLinear(div=div)
+        meas.values[point[0]:point[0]+width,point[1]:point[1]+width] = stencil
+
+        if space == 'H1':
+            # Then we have to make this an element of coarse H1,
+            # which we do by creating a hat basis and solving
+            v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+            meas = hat_b.reconstruct(v)
             
         M_m.append(meas)
-    W = Basis(M_m, 'H1')
+    W = Basis(M_m, space)
     return W
+
+
+def make_local_integration_basis(div, int_div, space='L2'):
+
+    if div < int_div:
+        raise Exception('Integration div must be less than or equal to field div')
+
+    M_m = []
+    side_m = 2**int_div
+    h = 2**(-div)
+
+    int_size = 2**(div - int_div)
+    stencil = h*h*3.0 * np.ones([int_size+1, int_size+1])
+    stencil[0,:]=stencil[-1,:]=stencil[:,0]=stencil[:,-1]=h*h*3.0/2.0
+    stencil[0,0]=stencil[-1,-1]=h*h/2.0
+    stencil[0,-1]=stencil[-1,0]=h*h
+   
+    if space == 'H1':
+        hat_b = make_hat_basis(div=div, space='H1')
+        hat_b.make_grammian()
+
+    for i in range(side_m):
+        for j in range(side_m):
+
+            meas = DyadicPWLinear(div=div)
+            meas.values[i*int_size:(i+1)*int_size+1, j*int_size:(j+1)*int_size+1] = stencil
+
+            if space == 'H1':
+                # Then we have to make this an element of coarse H1,
+                # which we do by creating a hat basis and solving
+                v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+                meas = hat_b.reconstruct(v)
+
+            M_m.append(meas)
+    
+    W = Basis(M_m, space)
+    return W
+
 
 def optimal_reconstruction(W, V_n, w, disp_cond=False):
     """ And here it is - the optimal """
@@ -979,11 +1033,10 @@ def optimal_reconstruction(W, V_n, w, disp_cond=False):
 
     # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
     # iff W is orthonormal...
+    cond = np.linalg.cond(G.T @ G)
     if disp_cond:
-        cond = np.linalg.cond(G.T @ G)
         print('Condition number of G.T * G = {0}'.format(cond))
-        return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
         
-    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star))
+    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
 
 
