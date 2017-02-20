@@ -861,6 +861,47 @@ class OrthonormalBasis(Basis):
     def orthonormalise(self):
         return self
 
+
+def ApproximationPair(Object):
+
+    def __init__(self, Wm, Vn):
+
+        self.Wm = Wm
+        self.Vn = Vn
+        self.m = Wm.n
+        self.n = Vn.n
+
+        self.G = self.cross_grammian(Wm, Vn)
+        
+        self.U, self.S, self.V = np.linalg.svd(self.G)
+        
+        self.beta = self.S[-1] #self.beta(Wm, Vn)
+
+    def cross_grammian(self, W, V):
+        CG = np.zeros([W.n, V.n])
+        
+        for i in range(W.n):
+            for j in range(V.n):
+                CG[i,j] = self.vecs[i].dot(other.vecs[j], self.space)
+        return CG
+
+    def optimal_reconstruction(self, w, disp_cond=False):
+        """ And here it is - the optimal """
+        #w = W.dot(u)
+        c = np.linalg.solve(self.G.T @ self.G, self.G.T @ w)
+
+        v_star = self.Vn.reconstruct(c)
+
+        u_star = v_star + self.Wm.reconstruct(w - self.Wm.dot(v_star))
+
+        # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
+        # iff W is orthonormal...
+        cond = np.linalg.cond(self.G.T @ self.G)
+        if disp_cond:
+            print('Condition number of G.T * G = {0}'.format(cond))
+        
+        return u_star, v_star, self.Wm.reconstruct(w), self.Wm.reconstruct(self.Wm.dot(v_star)), 
+
 def make_hat_basis(div, space='L2'):
     # Makes a complete hat basis for division div
     V_n = []
@@ -1038,5 +1079,3 @@ def optimal_reconstruction(W, V_n, w, disp_cond=False):
         print('Condition number of G.T * G = {0}'.format(cond))
         
     return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
-
-
