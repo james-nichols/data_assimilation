@@ -110,7 +110,7 @@ class DyadicPWConstant(object):
             elif func is not None:
                 raise Exception('DyadicPWLinear: Error - need grid size when specifying function')
 
-    def dot(self, other, space='L2'):
+    def dot(self, other, space='H1'):
         if isinstance(other, type(self)):
             if space == 'L2':
                 return self.L2_dot(other)
@@ -123,7 +123,7 @@ class DyadicPWConstant(object):
         else:
             raise Exception('Dot product can only be between compatible dyadic functions')
 
-    def norm(self, space='L2'):
+    def norm(self, space='H1'):
         return self.dot(self, space)
     
     def L2_dot(self, other):
@@ -294,7 +294,7 @@ class DyadicPWLinear(object):
             # TODO: keep the function so we can do a proper interpolation, not just a linear
             # interpolation... but maybe we don't want that either
 
-    def dot(self, other, space='L2'):
+    def dot(self, other, space='H1'):
         if isinstance(other, type(self)):
             if space == 'L2':
                 return self.L2_dot(other)
@@ -314,7 +314,7 @@ class DyadicPWLinear(object):
         else:
             raise Exception('Dot product can only be between compatible dyadic functions')
 
-    def norm(self, space='L2'):
+    def norm(self, space='H1'):
         return self.dot(self, space)
     
     def H1_dot(self, other):
@@ -589,10 +589,10 @@ class DyadicPWHybrid(object):
         if self.div < f.div:
             return self.interpolate(f.div), f, f.div
 
-    def norm(self, space='L2'):
+    def norm(self, space='H1'):
         return self.dot(self, space)
 
-    def dot(self, other, space='L2'):
+    def dot(self, other, space='H1'):
         return 0.0
     
 
@@ -768,7 +768,7 @@ class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
         including an orthonormalisation procedure """
 
-    def __init__(self, vecs, space='L2'):
+    def __init__(self, vecs, space='H1'):
         # No smart initialisation here...
         self.vecs = vecs
         self.n = len(vecs)
@@ -875,7 +875,7 @@ class Basis(object):
 
 class OrthonormalBasis(Basis):
 
-    def __init__(self, vecs, space='L2'):
+    def __init__(self, vecs, space='H1'):
         # We quite naively assume that the basis we are given *is* in 
         # fact orthonormal, and don't do any testing...
 
@@ -892,33 +892,61 @@ class OrthonormalBasis(Basis):
         return self
 
 
-def ApproximationPair(Object):
+class BasisPair(object):
     """ This class automatically sets up the cross grammian, calculates
         beta, and can do the optimal reconstruction and calculated a favourable basis """
 
-    def __init__(self, Wm, Vn, space='L2'):
+    def __init__(self, Wm, Vn, space='H1'):
 
+        if Wm.space != Vn.space or Wm.space != space:
+            raise Exception('Warning - all bases must have matching norms')
+        
         self.Wm = Wm
         self.Vn = Vn
         self.m = Wm.n
         self.n = Vn.n
+        self.space = space
+        
+        self.G = self.cross_grammian()
+        self.U = self.S = self.V = None
 
-        self.G = self.cross_grammian(Wm, Vn)
+    def cross_grammian(self):
+        CG = np.zeros([self.m, self.n])
         
-        self.U, self.S, self.V = np.linalg.svd(self.G)
-        
-        self.beta = self.S[-1] #self.beta(Wm, Vn)
-
-    def cross_grammian(self, W, V):
-        CG = np.zeros([W.n, V.n])
-        
-        for i in range(W.n):
-            for j in range(V.n):
-                CG[i,j] = self.vecs[i].dot(W.vecs[j], self.space)
+        for i in range(self.m):
+            for j in range(self.n):
+                CG[i,j] = self.Wm.vecs[i].dot(self.Vn.vecs[j], self.space)
         return CG
+    
+    def beta(self):
+        if self.U is None or self.S is None or self.V is None:
+            self.calc_svd()
+
+        return S[-1]
+
+    def calc_svd(self):
+        if self.U is None or self.S is None or self.V is None:
+            self.U, self.S, self.V = np.linalg.svd(self.G)
+
+    def make_favorable_basis(self):
+        if self.U is None or self.S is None or self.V is None:
+            self.calc_svd()
+
+        fb = FavorableBasisPair(self.Wm.ortho_matrix_multiply(self.U.T), 
+                                self.Vn.ortho_matrix_multiply(self.V), self.space)
+        # We do this to save time later...
+        fb.U = np.eye(self.n)
+        fb.V = np.eye(self.m)
+        fb.S = self.S
+        return fb
+
+    def measure_and_reconstruct(self, u, disp_cond=False):
+        """ Just a little helper function. Not sure we really want this here """ 
+        u_p_W = self.Wm.dot(u)
+        return self.optimal_reconstruction(u_p_W, disp_cond)
 
     def optimal_reconstruction(self, w, disp_cond=False):
-        """ And here it is - the optimal """
+        """ And here it is - the optimal reconstruction """
         #w = W.dot(u)
         c = np.linalg.solve(self.G.T @ self.G, self.G.T @ w)
 
@@ -932,9 +960,62 @@ def ApproximationPair(Object):
         if disp_cond:
             print('Condition number of G.T * G = {0}'.format(cond))
         
-        return u_star, v_star, self.Wm.reconstruct(w), self.Wm.reconstruct(self.Wm.dot(v_star)), 
+        return u_star, v_star, self.Wm.reconstruct(w), self.Wm.reconstruct(self.Wm.dot(v_star)), cond
 
-def make_hat_basis(div, space='L2'):
+class FavorableBasisPair(BasisPair):
+    """ This class automatically sets up the cross grammian, calculates
+        beta, and can do the optimal reconstruction and calculated a favourable basis """
+
+    def __init__(self, Wm, Vn, space='H1'):
+        # We quite naively assume that the basis we are given *is* in 
+        # fact orthonormal, and don't do any testing...
+        super().__init__(Wm, Vn, space)
+
+    def make_favorable_basis(self):
+        return self
+
+    def optimal_reconstruction(self, w, disp_cond=False):
+        """ Optimal reconstruction is much easier with the favorable basis calculated 
+            NB we have to assume that w is measured in terms of our basis Wn here... """
+        
+        w_tail = np.zeros(w.shape)
+        w_tail[self.n:] = w[self.n:]
+        
+        v_star = self.Vn.reconstruct(w[:self.n] / self.S) 
+        u_star = v_star + self.Wm.reconstruct(w_tail)
+
+        return u_star, v_star, self.Wm.reconstruct(w), self.Wm.reconstruct(self.Wm.dot(v_star))
+
+"""
+ This code here is maintained detached from the basis pair algorithm for backwards
+ compatibility with previous tests
+"""
+def optimal_reconstruction(W, V_n, w, disp_cond=False):
+    """ And here it is - the optimal """
+    G = W.cross_grammian(V_n)
+    #w = W.dot(u)
+    c = np.linalg.solve(G.T @ G, G.T @ w)
+
+    v_star = V_n.reconstruct(c)
+
+    u_star = v_star + W.reconstruct(w - W.dot(v_star))
+
+    # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
+    # iff W is orthonormal...
+    cond = np.linalg.cond(G.T @ G)
+    if disp_cond:
+        print('Condition number of G.T * G = {0}'.format(cond))
+        
+    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
+
+"""
+*****************************************************************************************
+All the functions below are for building specific basis systems, reduced basis, sinusoid, 
+coarse grid hat functions, etc...
+*****************************************************************************************
+"""
+
+def make_hat_basis(div, space='H1'):
     # Makes a complete hat basis for division div
     V_n = []
     # n is the number of internal grid points, i.e. we will have n different hat functionsdd
@@ -949,7 +1030,7 @@ def make_hat_basis(div, space='L2'):
 
     return Basis(V_n, space=space)
 
-def make_sine_basis(div, N=None, M=None, space='L2'):
+def make_sine_basis(div, N=None, M=None, space='H1'):
     V_n = []
 
     if N is None:
@@ -968,7 +1049,7 @@ def make_sine_basis(div, N=None, M=None, space='L2'):
 
     return Basis(V_n, space=space)
 
-def make_random_basis(n, field_div, fem_div, space='L2', a_bar=1.0, c=0.5):
+def make_random_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
     # Make a basis of m solutions to the FEM problem, from random generated fields
 
     V_n = []
@@ -983,7 +1064,7 @@ def make_random_basis(n, field_div, fem_div, space='L2', a_bar=1.0, c=0.5):
 
     return Basis(V_n, space=space), fields
 
-def make_random_approx_basis(m, div, width=2, space='L2', a_bar=1.0, c=0.5, seed=None):
+def make_random_approx_basis(m, div, width=2, space='H1', a_bar=1.0, c=0.5, seed=None):
     # Make a basis of m solutions to the FEM problem, from random generated fields
 
     V_n = []
@@ -1007,7 +1088,7 @@ def make_random_approx_basis(m, div, width=2, space='L2', a_bar=1.0, c=0.5, seed
     return Basis(V_n, space=space), fields
 
 
-def make_approx_basis(div, low_point=0.01, space='L2'):
+def make_approx_basis(div, low_point=0.01, space='H1'):
     # Make it out of a few solutions FE
     side_n = 2**div
     V_n = []
@@ -1024,7 +1105,7 @@ def make_approx_basis(div, low_point=0.01, space='L2'):
 
     return Basis(V_n, space=space), fields
 
-def make_random_local_integration_basis(m, div, width=2, space='L2'):
+def make_random_local_integration_basis(m, div, width=2, space='H1'):
 
     M_m = []
     
@@ -1057,7 +1138,7 @@ def make_random_local_integration_basis(m, div, width=2, space='L2'):
     return W
 
 
-def make_local_integration_basis(div, int_div, space='L2'):
+def make_local_integration_basis(div, int_div, space='H1'):
 
     if div < int_div:
         raise Exception('Integration div must be less than or equal to field div')
@@ -1094,20 +1175,3 @@ def make_local_integration_basis(div, int_div, space='L2'):
     return W
 
 
-def optimal_reconstruction(W, V_n, w, disp_cond=False):
-    """ And here it is - the optimal """
-    G = W.cross_grammian(V_n)
-    #w = W.dot(u)
-    c = np.linalg.solve(G.T @ G, G.T @ w)
-
-    v_star = V_n.reconstruct(c)
-
-    u_star = v_star + W.reconstruct(w - W.dot(v_star))
-
-    # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
-    # iff W is orthonormal...
-    cond = np.linalg.cond(G.T @ G)
-    if disp_cond:
-        print('Condition number of G.T * G = {0}'.format(cond))
-        
-    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
