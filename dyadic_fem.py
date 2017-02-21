@@ -827,6 +827,33 @@ class Basis(object):
         u_p = type(self.vecs[0])((c * self.values_flat).sum(axis=2)) 
         return u_p
 
+    def matrix_multiply(self, M):
+        # Build another basis from a matrix, essentially just calls 
+        # reconstruct for each row in M
+        if M.shape[0] != M.shape[1] or M.shape[0] != self.n:
+            raise Exception('M must be a {0}x{1} square matrix'.format(self.n, self.n))
+
+        vecs = []
+        for i in range(M.shape[0]):
+            vecs.append(self.reconstruct(M[i,:]))
+        
+        # In case this is an orthonormal basis
+        return Basis(vecs, space=self.space)
+
+    def ortho_matrix_multiply(self, M):
+        # Build another basis from an orthonormal matrix, 
+        # which means that the basis that comes from it
+        # is also orthonormal *if* it was orthonormal to begin with
+        if M.shape[0] != M.shape[1] or M.shape[0] != self.n:
+            raise Exception('M must be a {0}x{1} square matrix'.format(self.n, self.n))
+
+        vecs = []
+        for i in range(M.shape[0]):
+            vecs.append(self.reconstruct(M[i,:]))
+        
+        # In case this is an orthonormal basis
+        return type(self)(vecs, space=self.space)
+
     def orthonormalise(self):
 
         if self.G is None:
@@ -849,6 +876,9 @@ class Basis(object):
 class OrthonormalBasis(Basis):
 
     def __init__(self, vecs, space='L2'):
+        # We quite naively assume that the basis we are given *is* in 
+        # fact orthonormal, and don't do any testing...
+
         super().__init__(vecs, space)
         self.G = np.eye(self.n)
 
@@ -863,8 +893,10 @@ class OrthonormalBasis(Basis):
 
 
 def ApproximationPair(Object):
+    """ This class automatically sets up the cross grammian, calculates
+        beta, and can do the optimal reconstruction and calculated a favourable basis """
 
-    def __init__(self, Wm, Vn):
+    def __init__(self, Wm, Vn, space='L2'):
 
         self.Wm = Wm
         self.Vn = Vn
@@ -882,7 +914,7 @@ def ApproximationPair(Object):
         
         for i in range(W.n):
             for j in range(V.n):
-                CG[i,j] = self.vecs[i].dot(other.vecs[j], self.space)
+                CG[i,j] = self.vecs[i].dot(W.vecs[j], self.space)
         return CG
 
     def optimal_reconstruction(self, w, disp_cond=False):
