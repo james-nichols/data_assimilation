@@ -789,10 +789,11 @@ class Basis(object):
         return u_d
 
     def make_grammian(self):
-        self.G = np.zeros([self.n,self.n])
-        for i in range(self.n):
-            for j in range(i+1):
-                self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.space)
+        if self.G is None:
+            self.G = np.zeros([self.n,self.n])
+            for i in range(self.n):
+                for j in range(i+1):
+                    self.G[i,j] = self.G[j,i] = self.vecs[i].dot(self.vecs[j], self.space)
 
     def cross_grammian(self, other):
         CG = np.zeros([self.n, other.n])
@@ -812,7 +813,10 @@ class Basis(object):
                 self.make_grammian()
 
             u_n = self.dot(u)
-            y_n = np.linalg.solve(self.G, u_n)
+            if sparse.issparse(self.G):
+                y_n = sparse.linalg.spsolve(self.G, u_n)
+            else:
+                y_n = np.linalg.solve(self.G, u_n)
 
             # We allow the projection to be of the same type 
             # Also create it from the simple broadcast and sum (which surely should
@@ -862,7 +866,11 @@ class Basis(object):
         # We do a cholesky factorisation rather than a Gram Schmidt, as
         # we have a symmetric +ve definite matrix, so this is a cheap and
         # easy way to get an orthonormal basis from our previous basis
-        L = np.linalg.cholesky(self.G)
+        
+        if sparse.issparse(self.G):
+            L = sparse.cholmod.cholesky(self.G)
+        else:
+            L = np.linalg.cholesky(self.G)
         L_inv = scipy.linalg.lapack.dtrtri(L.T)[0]
         
         ortho_vecs = []
@@ -880,7 +888,8 @@ class OrthonormalBasis(Basis):
         # fact orthonormal, and don't do any testing...
 
         super().__init__(vecs, space)
-        self.G = np.eye(self.n)
+        #self.G = np.eye(self.n)
+        self.G = sparse.identity(self.n)
 
     def project(self, u):
         # Now that the system is orthonormal, we don't need to solve a linear system
@@ -1027,8 +1036,27 @@ def make_hat_basis(div, space='H1'):
             v_i = DyadicPWLinear(div = div)
             v_i.values[k+1, l+1] = 1.0
             V_n.append(v_i)
+    
+    b = Basis(V_n, space=space)
 
-    return Basis(V_n, space=space)
+    h = 2 ** (- b.vecs[0].div)
+    # We construct the Grammian here explicitly, otherwise it takes *forever*
+    # as the grammian is often used in Reisz representer calculations
+    grammian = np.zeros([side_n*side_n, side_n*side_n])
+    diag = (4.0 + h*h/2.0) * np.ones(side_n*side_n)
+    lr_diag = (h*h/12.0 - 1) * np.ones(side_n*side_n)
+
+    # min_diag is below the diagonal, hence deals with element to the left in the FEM grid
+    lr_diag[side_n-1::side_n] = 0 # These corresponds to edges on left or right extreme
+    lr_diag = lr_diag[:-1]
+
+    ud_diag = (h*h/12.0 - 1) * np.ones(side_n*side_n)
+    ud_diag = ud_diag[side_n:]
+    
+    grammian = sparse.diags([diag, lr_diag, lr_diag, ud_diag, ud_diag], [0, -1, 1, -side_n, side_n]).tocsr()
+    b.G = grammian
+     
+    return b
 
 def make_sine_basis(div, N=None, M=None, space='H1'):
     V_n = []
@@ -1117,11 +1145,11 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
     stencil[0,:]=stencil[-1,:]=stencil[:,0]=stencil[:,-1]=h*h*3.0/2.0
     stencil[0,0]=stencil[-1,-1]=h*h/2.0
     stencil[0,-1]=stencil[-1,0]=h*h
-
+    
     if space == 'H1':
         hat_b = make_hat_basis(div=div, space='H1')
         hat_b.make_grammian()
-
+    
     for i in range(m):
         point = points[locs[i]]
         meas = DyadicPWLinear(div=div)
@@ -1130,10 +1158,14 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
         if space == 'H1':
             # Then we have to make this an element of coarse H1,
             # which we do by creating a hat basis and solving
-            v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+            if sparse.issparse(hat_b.G):
+                v = sparse.linalg.spsolve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+            else:
+                v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
             meas = hat_b.reconstruct(v)
             
         M_m.append(meas)
+    
     W = Basis(M_m, space)
     return W
 
@@ -1166,7 +1198,10 @@ def make_local_integration_basis(div, int_div, space='H1'):
             if space == 'H1':
                 # Then we have to make this an element of coarse H1,
                 # which we do by creating a hat basis and solving
-                v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+                if sparse.issparse(hat_b.G):
+                    v = sparse.linalg.spsolve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+                else:
+                    v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
                 meas = hat_b.reconstruct(v)
 
             M_m.append(meas)
