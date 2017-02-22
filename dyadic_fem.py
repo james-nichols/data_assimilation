@@ -1077,9 +1077,8 @@ def make_sine_basis(div, N=None, M=None, space='H1'):
 
     return Basis(V_n, space=space)
 
-def make_random_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
+def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
     # Make a basis of m solutions to the FEM problem, from random generated fields
-
     V_n = []
     fields = []
 
@@ -1091,30 +1090,6 @@ def make_random_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
         V_n.append(fem.u)
 
     return Basis(V_n, space=space), fields
-
-def make_random_approx_basis(m, div, width=2, space='H1', a_bar=1.0, c=0.5, seed=None):
-    # Make a basis of m solutions to the FEM problem, from random generated fields
-
-    V_n = []
-    fields = []
-
-    points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
-    locs = np.random.choice(range(len(points)), m, replace=False)
-
-    for i in range(m):
-        #a = make_dyadic_random_field(div=div, a_bar=a_bar, c=c, seed=seed)
-        a = DyadicPWConstant(div=div)
-        a.values[:,:] = a_bar 
-
-        point = points[locs[i]]
-        a.values[point[0]:point[0]+width, point[1]:point[1]+width] = a_bar - c
-        fields.append(a)
-        fem = DyadicFEMSolver(div=div, rand_field=a, f=1.0)
-        fem.solve()
-        V_n.append(fem.u)
-
-    return Basis(V_n, space=space), fields
-
 
 def make_approx_basis(div, low_point=0.01, space='H1'):
     # Make it out of a few solutions FE
