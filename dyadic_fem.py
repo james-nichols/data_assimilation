@@ -768,19 +768,28 @@ class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
         including an orthonormalisation procedure """
 
-    def __init__(self, vecs, space='H1'):
+    def __init__(self, vecs, space='H1', values_flat=None):
         # No smart initialisation here...
         self.vecs = vecs
         self.n = len(vecs)
         self.space = space
         # Make a flat "values" thing for speed's sake, so we
         # can use numpy power!
-        self.values_flat = self.vecs[0].values
-        for vec in self.vecs[1:]:
-            self.values_flat = np.dstack((self.values_flat, vec.values))
+        # NB we allow it to be set externally for accessing speed
+        if values_flat is None:
+            self.values_flat = self.vecs[0].values
+            for vec in self.vecs[1:]:
+                self.values_flat = np.dstack((self.values_flat, vec.values))
+        else:
+            self.values_flat = values_flat
 
         self.orthonormal_basis = None
         self.G = None
+
+    def subspace(self, indices):
+        """ To be able to do "nested" spaces, the easiest way is to implement
+            subspaces such that we can draw from a larger ambient space """
+        return type(self)(self.vecs[indices], space=self.space, values_flat=self.values_flat[:,:,indices])
 
     def dot(self, u):
         u_d = np.zeros(self.n)
@@ -883,11 +892,11 @@ class Basis(object):
 
 class OrthonormalBasis(Basis):
 
-    def __init__(self, vecs, space='H1'):
+    def __init__(self, vecs, space='H1', values_flat=None):
         # We quite naively assume that the basis we are given *is* in 
         # fact orthonormal, and don't do any testing...
 
-        super().__init__(vecs, space)
+        super().__init__(vecs, space=space, values_flat=values_flat)
         #self.G = np.eye(self.n)
         self.G = sparse.identity(self.n)
 
@@ -909,7 +918,9 @@ class BasisPair(object):
 
         if Wm.space != Vn.space or Wm.space != space:
             raise Exception('Warning - all bases must have matching norms')
-        
+        if Vn.n > Wm.n:
+            raise Exception('Error - Wm must be of higher dimensionality than Vn')
+
         self.Wm = Wm
         self.Vn = Vn
         self.m = Wm.n
@@ -931,7 +942,7 @@ class BasisPair(object):
         if self.U is None or self.S is None or self.V is None:
             self.calc_svd()
 
-        return S[-1]
+        return self.S[-1]
 
     def calc_svd(self):
         if self.U is None or self.S is None or self.V is None:
@@ -990,7 +1001,7 @@ class FavorableBasisPair(BasisPair):
         w_tail = np.zeros(w.shape)
         w_tail[self.n:] = w[self.n:]
         
-        v_star = self.Vn.reconstruct(w[:self.n] / self.S) 
+        v_star = self.Vn.reconstruct(w[:self.n] / self.S)
         u_star = v_star + self.Wm.reconstruct(w_tail)
 
         return u_star, v_star, self.Wm.reconstruct(w), self.Wm.reconstruct(self.Wm.dot(v_star))
