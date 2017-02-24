@@ -60,7 +60,7 @@ class DyadicFEMSolver(object):
         ud_diag = -(a[1:-1, 1:] + a[1:-1, :-1]).flatten()
 
         self.A = sparse.diags([diag, lr_diag, lr_diag, ud_diag, ud_diag], [0, -1, 1, -self.n_side, self.n_side]).tocsr()
-        self.f = 0.5 * self.h * self.h * np.ones(self.n_el)
+        self.f = f * 0.5 * self.h * self.h * np.ones(self.n_el)
 
         self.u = DyadicPWLinear(np.zeros([self.n_side + 2, self.n_side + 2]), self.div)
 
@@ -320,7 +320,7 @@ class DyadicPWLinear(object):
     def H1_dot(self, other):
         """ Compute the H1_0 dot product with another DyadicPWLinear function
             automatically interpolates the coarser function """
-
+        
         d = max(self.div,other.div)
         u = self.interpolate(d).values
         v = other.interpolate(d).values
@@ -1088,7 +1088,7 @@ def make_sine_basis(div, N=None, M=None, space='H1'):
 
     return Basis(V_n, space=space)
 
-def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
+def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5, f=1.0):
     # Make a basis of m solutions to the FEM problem, from random generated fields
     V_n = []
     fields = []
@@ -1096,7 +1096,7 @@ def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5):
     for i in range(n):
         a = make_dyadic_random_field(div=field_div, a_bar=a_bar, c=c)
         fields.append(a)
-        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=1.0)
+        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=f)
         fem.solve()
         V_n.append(fem.u)
 
