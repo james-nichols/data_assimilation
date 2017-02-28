@@ -777,9 +777,9 @@ class Basis(object):
         # can use numpy power!
         # NB we allow it to be set externally for accessing speed
         if values_flat is None:
-            self.values_flat = self.vecs[0].values
-            for vec in self.vecs[1:]:
-                self.values_flat = np.dstack((self.values_flat, vec.values))
+            self.values_flat = np.zeros(np.append(self.vecs[0].values.shape, len(self.vecs)))
+            for i, vec in enumerate(self.vecs):
+                self.values_flat[:,:,i] = vec.values
         else:
             self.values_flat = values_flat
 
