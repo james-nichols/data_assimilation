@@ -791,6 +791,13 @@ class Basis(object):
             subspaces such that we can draw from a larger ambient space """
         return type(self)(self.vecs[indices], space=self.space, values_flat=self.values_flat[:,:,indices])
 
+    def subspace_mask(self, mask):
+        """ Here we make a subspace by using a boolean mask that needs to be of
+            the same size as the number of vectors. Used for the cross validation """
+        if mask.shape[0] != len(self.vecs):
+            raise Exception('Subspace mask must be the same size as length of vectors')
+        return type(self)(list(compress(self.vecs, mask)), space=self.space, values_flat=self.values_flat[:,:,mask])
+
     def dot(self, u):
         u_d = np.zeros(self.n)
         for i, v in enumerate(self.vecs):
