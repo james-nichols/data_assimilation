@@ -108,13 +108,16 @@ def shift_point(self, s, x):
 
 class PointGenerator(object):
 
-    def __init__(self, d, n):
+    def __init__(self, d, n, lims=None):
 
         self.d = d
         self.n = n
 
         self.points = None
         self.count = 0
+
+        if lims is not None:
+            self.lims = lims
 
     def next_point(self):
         count += 1
@@ -128,11 +131,15 @@ class PointGenerator(object):
         point_shifted = self.points + shift
         return point_shifted - np.floor(point_shifted)
 
+    def apply_random_shift(self):
+        shift = np.random.random(d)
+        self.points = self.points + shift
+
 class MonteCarlo(PointGenerator):
 
     def __init__(self, d, n, lims=None, seed=None):
         
-        super().__init__(d, n)
+        super().__init__(d, n, lims)
 
         if seed is not None:
             np.random.seed(seed)
@@ -144,9 +151,9 @@ class MonteCarlo(PointGenerator):
 
 class QMCLatticeRule(PointGenerator):
 
-    def __init__(self, d, n, filename=None, lims=None):
+    def __init__(self, d, n, lims=None, filename=None):
 
-        super(QMCLatticeRule, self).__init__(d, n)
+        super().__init__(d, n, lims)
 
         self.z = np.zeros(self.d)
         if filename is not None:
@@ -155,7 +162,8 @@ class QMCLatticeRule(PointGenerator):
             self.get_generator('lattice_rules/lattice-32001-1024-1048576.3600')
 
         self.points = np.modf(np.outer(self.z, np.arange(n)/n))[0]
-
+        if lims is not None and len(lims) == 2:
+            self.points = (lims[1] - lims[0]) * self.points + lims[0]
 
     def get_generator(self, filename):
         gen_file = open(filename, 'r')
