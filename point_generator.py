@@ -138,7 +138,7 @@ class MonteCarlo(PointGenerator):
             np.random.seed(seed)
 
         if lims is not None and len(lims) == 2:
-            self.points = (lims[1] - lims[0]) * np.random.random(d, n) + lims[0]
+            self.points = (lims[1] - lims[0]) * np.random.random((d, n)) + lims[0]
         else: 
             self.points = np.random.random(d, n)
 

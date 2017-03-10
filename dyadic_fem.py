@@ -1,3 +1,14 @@
+"""
+dyadic_fem.py
+
+Author: James Ashton Nichols
+Start date: January 2017
+
+A library of tools to do state estimation of simple parametric PDEs. Includes
+FEM solver, optimal state reconstruction, favorable basis computation,
+and more. Links to relevant academic papers in README.md
+"""
+
 import math
 import numpy as np
 import scipy as sp
@@ -785,6 +796,22 @@ class Basis(object):
 
         self.orthonormal_basis = None
         self.G = None
+    
+    def add_vector(self, vec):
+        """ Add just one vector, so as to make the new Grammian calculation quick """
+
+        self.vecs.append(vec)
+        self.n += 1
+
+        if self.G is not None:
+            self.G = np.pad(self.G, ((0,1),(0,1)), 'constant')
+            for i in range(self.n):
+                self.G[self.n-1, i] = self.G[i, self.n-1] = self.vecs[-1].dot(self.vecs[i], space=self.space)
+
+        if self.values_flat.shape[2] <= self.n - 1:
+            self.values_flat.resize((self.values_flat.shape[0], self.values_flat.shape[1], self.n))
+        
+        self.values_flat[:,:,self.n-1] = vec.values
 
     def subspace(self, indices):
         """ To be able to do "nested" spaces, the easiest way is to implement
@@ -844,7 +871,7 @@ class Basis(object):
     def reconstruct(self, c):
         # Build a function from a vector of coefficients
         
-        u_p = type(self.vecs[0])((c * self.values_flat).sum(axis=2)) 
+        u_p = type(self.vecs[0])((c * self.values_flat[:,:,:self.n]).sum(axis=2)) 
         return u_p
 
     def matrix_multiply(self, M):
@@ -891,7 +918,7 @@ class Basis(object):
         
         ortho_vecs = []
         for i in range(self.n):
-            ortho_vecs.append(type(self.vecs[0])((L_inv[:,i] * self.values_flat).sum(axis=2)))
+            ortho_vecs.append(type(self.vecs[0])((L_inv[:,i] * self.values_flat[:,:,:self.n]).sum(axis=2)))
 
         self.orthonormal_basis = OrthonormalBasis(ortho_vecs, self.space)
 
@@ -911,7 +938,7 @@ class OrthonormalBasis(Basis):
         # Now that the system is orthonormal, we don't need to solve a linear system
         # to make the projection
         y_n = self.dot(u)
-        return type(self.vecs[0])((y_n * self.values_flat).sum(axis=2))
+        return type(self.vecs[0])((y_n * self.values_flat[:,:,:self.n]).sum(axis=2))
 
     def orthonormalise(self):
         return self
@@ -1076,24 +1103,27 @@ def make_hat_basis(div, space='H1'):
      
     return b
 
-def make_sine_basis(div, N=None, M=None, space='H1'):
+def make_sin_basis(div, N=None, space='H1'):
     V_n = []
 
     if N is None:
         N = 2**div - 1
-    if M is None:
-        M = 2**div - 1
-    # n is the number of internal grid points, i.e. we will have n different hat functionsdd
-    # for our coarse-grid basis
 
+    # We want an ordering such that we get (1,1), (1,2), (2,1), (2,2), (2,3), (3,2), (3,1), (1,3), ...
     for n in range(1,N+1):
-        for m in range(1,M+1):
+        for m in range(1,n+1):
             def f(x,y): return np.sin(n * math.pi * x) * np.sin(m * math.pi * y)
-            
             v_i = DyadicPWLinear(func = f, div = div)
             V_n.append(v_i)
+            
+            # We do the mirrored map here
+            if m < n:
+                def f(x,y): return np.sin(m * math.pi * x) * np.sin(n * math.pi * y)
+                v_i = DyadicPWLinear(func = f, div = div)
+                V_n.append(v_i)
 
     return Basis(V_n, space=space)
+
 
 def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5, f=1.0):
     # Make a basis of m solutions to the FEM problem, from random generated fields
@@ -1134,6 +1164,8 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
     locs = np.random.choice(range(len(points)), m, replace=False)
     h = 2**(-div)
 
+    local_meas_fun = DyadicPWConstant(div=div)
+    
     stencil = h*h*3.0 * np.ones([width, width])
     stencil[0,:]=stencil[-1,:]=stencil[:,0]=stencil[:,-1]=h*h*3.0/2.0
     stencil[0,0]=stencil[-1,-1]=h*h/2.0
@@ -1145,6 +1177,9 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
     
     for i in range(m):
         point = points[locs[i]]
+
+        local_meas_fun.values[point[0]:point[0]+width,point[1]:point[1]+width] += 1.0
+
         meas = DyadicPWLinear(div=div)
         meas.values[point[0]:point[0]+width,point[1]:point[1]+width] = stencil
 
@@ -1160,7 +1195,7 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
         M_m.append(meas)
     
     W = Basis(M_m, space)
-    return W
+    return W, local_meas_fun
 
 
 def make_local_integration_basis(div, int_div, space='H1'):
@@ -1203,3 +1238,66 @@ def make_local_integration_basis(div, int_div, space='H1'):
     return W
 
 
+def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a_bar=1.0, c=0.5, verbose=False):
+    """ """
+
+    basis_div = field_div
+    # First we need a point process generator
+    if point_dictionary.d != 2**basis_div * 2**basis_div:
+        raise Exception('Point generator is not of a correct dyadic level dimension')
+
+    d = point_dictionary.d
+    dict_size = point_dictionary.n
+
+    # Now we feed that in to the field generatr
+    D = []
+    fields = []
+    norms = np.zeros(dict_size)
+    
+    if verbose:
+        print('Generating dictionary point: ', end='')
+    for i in range(dict_size):
+        field = DyadicPWConstant(a_bar + c * point_dictionary.points[:,i].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        fields.append(field)
+        # Then the fem solver (there a faster way to do this all at once? This will be huge...
+        fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
+        fem_solver.solve()
+        D.append(fem_solver.u)
+        norms[i] = D[-1].norm(space='H1')
+        
+        if verbose and i % 50 == 0:
+            print('{0}... '.format(i), end='')
+        
+    # First find the maximum point by norm in this space
+    n0 = np.argmax(norms)
+
+    # We put in the first element - and make the flat values array large so 
+    # that it is essentially pre-allocated, for optimisation purposes...
+    val_flat = np.zeros(np.append(D[0].values.shape, n))
+    val_flat[:,:,0] = D[n0].values
+    Vn_greedy = Basis([D[n0]], space='H1', values_flat=val_flat)
+
+    Vn_greedy.make_grammian()
+
+    if verbose:
+        print('\n\nGenerating basis from greedy algorithm with dictionary: ')
+        print('i \t || phi_i || \t\t || phi_i - P_V_(i-1) phi_i ||')
+    # Now we start building the basis
+    for i in range(1, n):
+        
+        # Now we go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
+        p_V_d = np.zeros(dict_size)
+        for j in range(dict_size):
+            p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
+            
+        nj = np.argmax(norms * norms - p_V_d * p_V_d)
+        
+        Vn_greedy.add_vector(D[nj])
+        
+        if verbose:
+            print('{0} : \t {1} \t {2}'.format(i, norms[nj], norms[nj]*norms[nj] - p_V_d[nj] * p_V_d[nj]))
+    
+    if verbose:
+        print('\n\nDone!')
+
+        return Vn_greedy
