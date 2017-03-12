@@ -1156,7 +1156,7 @@ def make_approx_basis(div, low_point=0.01, space='H1'):
 
     return Basis(V_n, space=space), fields
 
-def make_random_local_integration_basis(m, div, width=2, space='H1'):
+def make_random_local_integration_basis(m, div, width=2, space='H1', return_map=False):
 
     M_m = []
     
@@ -1195,7 +1195,10 @@ def make_random_local_integration_basis(m, div, width=2, space='H1'):
         M_m.append(meas)
     
     W = Basis(M_m, space)
-    return W, local_meas_fun
+    if return_map:
+        return W, local_meas_fun
+
+    return W
 
 
 def make_local_integration_basis(div, int_div, space='H1'):
