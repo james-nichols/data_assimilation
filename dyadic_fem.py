@@ -1156,11 +1156,14 @@ def make_approx_basis(div, low_point=0.01, space='H1'):
 
     return Basis(V_n, space=space), fields
 
-def make_random_local_integration_basis(m, div, width=2, space='H1', return_map=False):
+def make_random_local_integration_basis(m, div, width=2, bounds=None, space='H1', return_map=False):
 
     M_m = []
     
-    points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
+    if bounds is not None:
+        points = list(product(range(bounds[0,0], bounds[0,1] - width), range(bounds[1,0], bounds[1,1] - width)))
+    else:
+        points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
     locs = np.random.choice(range(len(points)), m, replace=False)
     h = 2**(-div)
 
