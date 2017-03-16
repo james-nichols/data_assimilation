@@ -1317,4 +1317,92 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     if verbose:
         print('\n\nDone!')
 
-        return Vn_greedy
+    return Vn_greedy
+
+
+def data_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, Wm, a_bar=1.0, c=0.5, verbose=False):
+    """ Here we apply the greedy algorithm but with respect to the measurement space 
+        Note that we assume Wm to be orthonormal! """
+
+    if not isinstance(Wm, OrthonormalBasis):
+        raise Exception('Wm must be an orthonormal basis for the data-based greedy algorithm')
+
+    basis_div = field_div
+    # First we need a point process generator
+    if point_dictionary.d != 2**basis_div * 2**basis_div:
+        raise Exception('Point generator is not of a correct dyadic level dimension')
+
+    d = point_dictionary.d
+    dict_size = point_dictionary.n
+
+    # Now we feed that in to the field generatr
+    D = []
+    D_W = []
+    fields = []
+    norms = np.zeros(dict_size)
+    
+    if verbose:
+        print('Generating dictionary point: ', end='')
+    for i in range(dict_size):
+        field = DyadicPWConstant(a_bar + c * point_dictionary.points[:,i].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        fields.append(field)
+        # Then the fem solver (there a faster way to do this all at once? This will be huge...
+        fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
+        fem_solver.solve()
+        D.append(fem_solver.u)
+        D_W.append(Wm.dot(D[-1]))
+        norms[i] = np.linalg.norm(D_W[-1]) #D[-1].norm(space='H1')
+        
+        if verbose and i % 50 == 0:
+            print('{0}... '.format(i), end='')
+        
+    # First find the maximum point by norm in this space
+    n0 = np.argmax(norms)
+
+    # We put in the first element - and make the flat values array large so 
+    # that it is essentially pre-allocated, for optimisation purposes...
+    val_flat = np.zeros(np.append(D[0].values.shape, n))
+    val_flat[:,:,0] = D[n0].values
+    Vn_greedy = Basis([D[n0]], space='H1', values_flat=val_flat)
+
+    # And this is the greedy basis in projection space...
+    Vn_W = np.zeros([n, Wm.n])
+    Vn_W[0,:] = D_W[n0]
+
+    Vn_loc_G = np.zeros([n,n])
+    Vn_loc_G[0,0] = np.dot(Vn_W[0,:], Vn_W[0,:])# norms[n0] * norms[n0]
+
+    if verbose:
+        print('\n\nGenerating basis from greedy algorithm with dictionary: ')
+        print('i \t || phi_i || \t\t || phi_i - P_V_(i-1) phi_i ||')
+    # Now we start building the basis
+    for i in range(1, n):
+    
+        G = Vn_loc_G[:i,:i]
+
+        # Now we go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
+        p_V_d = np.zeros(dict_size)
+        for j in range(dict_size):
+            #p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
+            # Because we're in l2 the projection is much quicker (no dot prods!)
+            
+
+            c = np.linalg.solve(G, np.dot(Vn_W[:i,:], D_W[j])) 
+            p_v_Vn_Wm = np.dot(c, Vn_W[:i])
+            p_V_d[j] = np.linalg.norm(p_v_Vn_Wm)
+        
+        nj = np.argmax(norms * norms - p_V_d * p_V_d)
+        
+        Vn_greedy.add_vector(D[nj])
+        Vn_W[i, :] = D_W[nj]
+        for j in range(i):
+            Vn_loc_G[i,j] = Vn_loc_G[j,i] = np.dot(Vn_W[i,:], Vn_W[j,:])
+        Vn_loc_G[i,i] = np.dot(Vn_W[i,:], Vn_W[i,:])
+        
+        if verbose:
+            print('{0} : \t {1} \t {2}'.format(i, norms[nj], norms[nj]*norms[nj] - p_V_d[nj] * p_V_d[nj]))
+    
+    if verbose:
+        print('\n\nDone!')
+
+    return Vn_greedy
