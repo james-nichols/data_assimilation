@@ -1156,15 +1156,26 @@ def make_approx_basis(div, low_point=0.01, space='H1'):
 
     return Basis(V_n, space=space), fields
 
-def make_random_local_integration_basis(m, div, width=2, bounds=None, space='H1', return_map=False):
+def make_random_local_integration_basis(m, div, width=2, bounds=None, bound_prop=1.0, space='H1', return_map=False):
 
     M_m = []
     
+    full_points =  list(product(range(2**div - (width-1)), range(2**div - (width-1))))
+
     if bounds is not None:
-        points = list(product(range(bounds[0,0], bounds[0,1] - width), range(bounds[1,0], bounds[1,1] - width)))
+        bound_points = list(product(range(bounds[0,0], bounds[0,1] - (width-1)), range(bounds[1,0], bounds[1,1] - (width-1))))
+        remain_points = [p for p in full_points if p not in bound_points]
+        remain_locs = np.random.choice(range(len(remain_points)), round(m * (1.0 - bound_prop)), replace=False)
     else:
-        points = list(product(range(2**div - (width-1)), range(2**div - (width-1))))
-    locs = np.random.choice(range(len(points)), m, replace=False)
+        bound_points = full_points 
+        remain_points = [] 
+        remain_locs = []
+        
+    bound_locs = np.random.choice(range(len(bound_points)), round(m * bound_prop), replace=False)
+    
+    points = [bound_points[bl] for bl in bound_locs] + [remain_points[rl] for rl in remain_locs]
+    
+    #np.random.choice(range(len(points)), m, replace=False)
     h = 2**(-div)
 
     local_meas_fun = DyadicPWConstant(div=div)
@@ -1179,7 +1190,7 @@ def make_random_local_integration_basis(m, div, width=2, bounds=None, space='H1'
         hat_b.make_grammian()
     
     for i in range(m):
-        point = points[locs[i]]
+        point = points[i]
 
         local_meas_fun.values[point[0]:point[0]+width,point[1]:point[1]+width] += 1.0
 
