@@ -16,6 +16,7 @@ import scipy.signal
 import scipy.special
 import scipy.optimize
 import scipy.interpolate
+import scipy.linalg
 from scipy import sparse
 from itertools import *
 import inspect
@@ -861,7 +862,7 @@ class Basis(object):
             if sparse.issparse(self.G):
                 y_n = sparse.linalg.spsolve(self.G, u_n)
             else:
-                y_n = np.linalg.solve(self.G, u_n)
+                y_n = scipy.linalg.solve(self.G, u_n, sym_pos=True)
 
             # We allow the projection to be of the same type 
             # Also create it from the simple broadcast and sum (which surely should
@@ -1008,7 +1009,7 @@ class BasisPair(object):
     def optimal_reconstruction(self, w, disp_cond=False):
         """ And here it is - the optimal reconstruction """
         #w = W.dot(u)
-        c = np.linalg.solve(self.G.T @ self.G, self.G.T @ w)
+        c = scipy.linalg.solve(self.G.T @ self.G, self.G.T @ w, sym_pos=True)
 
         v_star = self.Vn.reconstruct(c)
 
@@ -1064,7 +1065,7 @@ def optimal_reconstruction(W, V_n, w, disp_cond=False):
     """ And here it is - the optimal """
     G = W.cross_grammian(V_n)
     #w = W.dot(u)
-    c = np.linalg.solve(G.T @ G, G.T @ w)
+    c = scipy.linalg.solve(G.T @ G, G.T @ w, sym_pos=True)
 
     v_star = V_n.reconstruct(c)
 
@@ -1228,7 +1229,7 @@ def make_random_local_integration_basis(m, div, width=2, bounds=None, bound_prop
             if sparse.issparse(hat_b.G):
                 v = sparse.linalg.spsolve(hat_b.G, meas.values[1:-1,1:-1].flatten())
             else:
-                v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+                v = scipy.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten(), sym_pos=True)
             meas = hat_b.reconstruct(v)
             
         M_m.append(meas)
@@ -1271,7 +1272,7 @@ def make_local_integration_basis(div, int_div, space='H1'):
                 if sparse.issparse(hat_b.G):
                     v = sparse.linalg.spsolve(hat_b.G, meas.values[1:-1,1:-1].flatten())
                 else:
-                    v = np.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten())
+                    v = scipy.linalg.solve(hat_b.G, meas.values[1:-1,1:-1].flatten(), sym_pos=True)
                 meas = hat_b.reconstruct(v)
 
             M_m.append(meas)
@@ -1411,7 +1412,7 @@ def data_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_di
             #p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
             # Because we're in l2 the projection is much quicker (no dot prods!)
             
-            c = np.linalg.solve(G, np.dot(Vn_W[:i,:], D_W[j])) 
+            c = scipy.linalg.solve(G, np.dot(Vn_W[:i,:], D_W[j]), sym_pos=True)
             p_v_Vn_Wm = np.dot(c, Vn_W[:i])
             p_V_d[j] = np.linalg.norm(D_W[j] - p_v_Vn_Wm)
         
