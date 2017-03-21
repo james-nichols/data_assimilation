@@ -121,7 +121,7 @@ class PointGenerator(object):
 
     def next_point(self):
         count += 1
-        return self.points[:, count-1] # Because we start the count at zeros
+        return self.points[count-1, :] # Because we start the count at zeros
 
     def shift_point(self, shift):
         point_shifted = self.points[:, self.count] + shift
@@ -145,9 +145,9 @@ class MonteCarlo(PointGenerator):
             np.random.seed(seed)
 
         if lims is not None and len(lims) == 2:
-            self.points = (lims[1] - lims[0]) * np.random.random((d, n)) + lims[0]
+            self.points = (lims[1] - lims[0]) * np.random.random((n, d)) + lims[0]
         else: 
-            self.points = np.random.random(d, n)
+            self.points = np.random.random(n, d)
 
 class QMCLatticeRule(PointGenerator):
 
@@ -161,7 +161,8 @@ class QMCLatticeRule(PointGenerator):
         else:
             self.get_generator('lattice_rules/lattice-32001-1024-1048576.3600')
 
-        self.points = np.modf(np.outer(self.z, np.arange(n)/n))[0]
+        self.points = np.modf(np.outer(self.z, np.arange(n)/n))[0].T
+
         if lims is not None and len(lims) == 2:
             self.points = (lims[1] - lims[0]) * self.points + lims[0]
 
