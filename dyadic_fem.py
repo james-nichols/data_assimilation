@@ -25,6 +25,8 @@ import matplotlib.pyplot as plt
 from matplotlib import cm 
 from mpl_toolkits.mplot3d import axes3d, Axes3D
 
+import point_generator as pg
+
 import pdb
 
 class ConstantField(object):
@@ -948,7 +950,7 @@ class BasisPair(object):
     """ This class automatically sets up the cross grammian, calculates
         beta, and can do the optimal reconstruction and calculated a favourable basis """
 
-    def __init__(self, Wm, Vn, space='H1'):
+    def __init__(self, Wm, Vn, G=None, space='H1'):
 
         if Wm.space != Vn.space or Wm.space != space:
             raise Exception('Warning - all bases must have matching norms')
@@ -961,7 +963,11 @@ class BasisPair(object):
         self.n = Vn.n
         self.space = space
         
-        self.G = self.cross_grammian()
+        if G is not None:
+            self.G = G
+        else:
+            self.G = self.cross_grammian()
+
         self.U = self.S = self.V = None
 
     def cross_grammian(self):
@@ -983,15 +989,15 @@ class BasisPair(object):
             self.U, self.S, self.V = np.linalg.svd(self.G)
 
     def make_favorable_basis(self):
+        if isinstance(self, FavorableBasisPair):
+            return self
+
         if self.U is None or self.S is None or self.V is None:
             self.calc_svd()
 
         fb = FavorableBasisPair(self.Wm.ortho_matrix_multiply(self.U.T), 
-                                self.Vn.ortho_matrix_multiply(self.V), self.space)
-        # We do this to save time later...
-        fb.U = np.eye(self.n)
-        fb.V = np.eye(self.m)
-        fb.S = self.S
+                                self.Vn.ortho_matrix_multiply(self.V), self.space,
+                                S = self.S, U = np.eye(self.n), V = np.eye(self.m))
         return fb
 
     def measure_and_reconstruct(self, u, disp_cond=False):
@@ -1020,10 +1026,20 @@ class FavorableBasisPair(BasisPair):
     """ This class automatically sets up the cross grammian, calculates
         beta, and can do the optimal reconstruction and calculated a favourable basis """
 
-    def __init__(self, Wm, Vn, space='H1'):
+    def __init__(self, Wm, Vn, S=None, U=None, V=None, space='H1'):
         # We quite naively assume that the basis we are given *is* in 
         # fact orthonormal, and don't do any testing...
-        super().__init__(Wm, Vn, space)
+
+        if S is not None:
+            # Initialise with the Grammian equal to the singular values
+            super().__init__(Wm, Vn, G=S, space=space)
+            self.S = S
+        else:
+            super().__init__(Wm, Vn, space=space)
+        if U is not None:
+            self.U = U
+        if V is not None:
+            self.V = V
 
     def make_favorable_basis(self):
         return self
@@ -1125,18 +1141,27 @@ def make_sin_basis(div, N=None, space='H1'):
     return Basis(V_n, space=space)
 
 
-def make_reduced_basis(n, field_div, fem_div, space='H1', a_bar=1.0, c=0.5, f=1.0):
+def make_reduced_basis(n, field_div, fem_div, point_dictionary=None, space='H1', a_bar=1.0, c=0.5, f=1.0):
     # Make a basis of m solutions to the FEM problem, from random generated fields
+
+    side_n = 2**field_div
+    
+    if point_dictionary is None:
+        point_dictionary = pg.MonteCarlo(d=side_n*side_n, n=n, lims=[-1, 1])
+    elif point_dictionary.n != n:
+        raise Exception('Need point dictionary with right number of points!')
+
     V_n = []
     fields = []
 
     for i in range(n):
-        a = make_dyadic_random_field(div=field_div, a_bar=a_bar, c=c)
-        fields.append(a)
-        fem = DyadicFEMSolver(div=fem_div, rand_field=a, f=f)
-        fem.solve()
-        V_n.append(fem.u)
-
+        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([side_n, side_n]), div=field_div)
+        fields.append(field)
+        # Then the fem solver (there a faster way to do this all at once? This will be huge...
+        fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
+        fem_solver.solve()
+        V_n.append(fem_solver.u)
+        
     return Basis(V_n, space=space), fields
 
 def make_approx_basis(div, low_point=0.01, space='H1'):
@@ -1274,7 +1299,7 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     if verbose:
         print('Generating dictionary point: ', end='')
     for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_dictionary.points[:,i].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
@@ -1344,7 +1369,7 @@ def data_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_di
     if verbose:
         print('Generating dictionary point: ', end='')
     for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_dictionary.points[:,i].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
@@ -1386,12 +1411,11 @@ def data_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_di
             #p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
             # Because we're in l2 the projection is much quicker (no dot prods!)
             
-
             c = np.linalg.solve(G, np.dot(Vn_W[:i,:], D_W[j])) 
             p_v_Vn_Wm = np.dot(c, Vn_W[:i])
-            p_V_d[j] = np.linalg.norm(p_v_Vn_Wm)
+            p_V_d[j] = np.linalg.norm(D_W[j] - p_v_Vn_Wm)
         
-        nj = np.argmax(norms * norms - p_V_d * p_V_d)
+        nj = np.argmax(p_V_d)
         
         Vn_greedy.add_vector(D[nj])
         Vn_W[i, :] = D_W[nj]
