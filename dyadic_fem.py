@@ -997,8 +997,9 @@ class BasisPair(object):
             self.calc_svd()
 
         fb = FavorableBasisPair(self.Wm.ortho_matrix_multiply(self.U.T), 
-                                self.Vn.ortho_matrix_multiply(self.V), self.space,
-                                S = self.S, U = np.eye(self.n), V = np.eye(self.m))
+                                self.Vn.ortho_matrix_multiply(self.V),
+                                S=self.S, U=np.eye(self.n), V=np.eye(self.m),
+                                space=self.space)
         return fb
 
     def measure_and_reconstruct(self, u, disp_cond=False):
