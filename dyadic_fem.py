@@ -1349,7 +1349,7 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     return Vn_greedy
 
 
-def data_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, Wm, a_bar=1.0, c=0.5, verbose=False):
+def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, Wm, a_bar=1.0, c=0.5, verbose=False):
     """ Here we apply the greedy algorithm but with respect to the measurement space 
         Note that we assume Wm to be orthonormal! """
 
