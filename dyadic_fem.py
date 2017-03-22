@@ -799,6 +799,7 @@ class Basis(object):
 
         self.orthonormal_basis = None
         self.G = None
+        self.U = self.S = self.V = None
     
     def add_vector(self, vec):
         """ Add just one vector, so as to make the new Grammian calculation quick """
@@ -859,10 +860,21 @@ class Basis(object):
                 self.make_grammian()
 
             u_n = self.dot(u)
-            if sparse.issparse(self.G):
-                y_n = sparse.linalg.spsolve(self.G, u_n)
-            else:
-                y_n = scipy.linalg.solve(self.G, u_n, sym_pos=True)
+            try:
+                if sparse.issparse(self.G):
+                    y_n = sparse.linalg.spsolve(self.G, u_n)
+                else:
+                    y_n = scipy.linalg.solve(self.G, u_n, sym_pos=True)
+            except np.linalg.LinAlgError as e:
+                print('Warning - basis is linearly dependent with {0} vectors, projecting using SVD'.format(self.n))
+
+                if self.U is None:
+                    if sparse.issparse(self.G):
+                        self.U, self.S, self.V =  scipy.sparse.linalg.svds(self.G)
+                    else:
+                        self.U, self.S, self.V = np.linalg.svd(self.G)
+                # This is the projection on the reduced rank basis 
+                y_n = self.V.T @ ((self.U.T @ u_n) / self.S)
 
             # We allow the projection to be of the same type 
             # Also create it from the simple broadcast and sum (which surely should
@@ -1009,8 +1021,11 @@ class BasisPair(object):
 
     def optimal_reconstruction(self, w, disp_cond=False):
         """ And here it is - the optimal reconstruction """
-        #w = W.dot(u)
-        c = scipy.linalg.solve(self.G.T @ self.G, self.G.T @ w, sym_pos=True)
+        try:
+            c = scipy.linalg.solve(self.G.T @ self.G, self.G.T @ w, sym_pos=True)
+        except np.linalg.LinAlgError as e:
+            print('Warning - unstable v* calculation, m={0}, n={1} for Wm and Vn, returning 0 function'.format(self.Wm.n, self.Vn.n))
+            c = np.zeros(self.Vn.n)
 
         v_star = self.Vn.reconstruct(c)
 
@@ -1064,21 +1079,8 @@ class FavorableBasisPair(BasisPair):
 """
 def optimal_reconstruction(W, V_n, w, disp_cond=False):
     """ And here it is - the optimal """
-    G = W.cross_grammian(V_n)
-    #w = W.dot(u)
-    c = scipy.linalg.solve(G.T @ G, G.T @ w, sym_pos=True)
-
-    v_star = V_n.reconstruct(c)
-
-    u_star = v_star + W.reconstruct(w - W.dot(v_star))
-
-    # Note that W.project(v_star) = W.reconsrtuct(W.dot(v_star))
-    # iff W is orthonormal...
-    cond = np.linalg.cond(G.T @ G)
-    if disp_cond:
-        print('Condition number of G.T * G = {0}'.format(cond))
-        
-    return u_star, v_star, W.reconstruct(w), W.reconstruct(W.dot(v_star)), cond
+    BP = BasisPair(W, V_n)
+    return BP.optimal_reconstruction(w, disp_cond)
 
 """
 *****************************************************************************************
