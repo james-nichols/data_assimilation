@@ -782,7 +782,7 @@ class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
         including an orthonormalisation procedure """
 
-    def __init__(self, vecs, space='H1', values_flat=None):
+    def __init__(self, vecs, space='H1', values_flat=None, pre_allocate=0):
         # No smart initialisation here...
         self.vecs = vecs
         self.n = len(vecs)
@@ -790,12 +790,17 @@ class Basis(object):
         # Make a flat "values" thing for speed's sake, so we
         # can use numpy power!
         # NB we allow it to be set externally for accessing speed
+
         if values_flat is None:
-            self.values_flat = np.zeros(np.append(self.vecs[0].values.shape, len(self.vecs)))
+            # Pre-allocate here is used for speed purposes... so that memory is allocated and ready to go...
+            self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
             for i, vec in enumerate(self.vecs):
                 self.values_flat[:,:,i] = vec.values
         else:
-            self.values_flat = values_flat
+            if values_flat.shape[2] != self.n:
+                raise Exception('Incorrectly sized flat value matrix, are the contents correct?')
+            self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
+            self.values_flat[:,:,:self.n] = values_flat
 
         self.orthonormal_basis = None
         self.G = None
@@ -1145,21 +1150,21 @@ def make_sin_basis(div, N=None, space='H1'):
     return Basis(V_n, space=space)
 
 
-def make_reduced_basis(n, field_div, fem_div, point_dictionary=None, space='H1', a_bar=1.0, c=0.5, f=1.0):
+def make_reduced_basis(n, field_div, fem_div, point_gen=None, space='H1', a_bar=1.0, c=0.5, f=1.0):
     # Make a basis of m solutions to the FEM problem, from random generated fields
 
     side_n = 2**field_div
     
-    if point_dictionary is None:
-        point_dictionary = pg.MonteCarlo(d=side_n*side_n, n=n, lims=[-1, 1])
-    elif point_dictionary.n != n:
+    if point_gen is None:
+        point_gen = pg.MonteCarlo(d=side_n*side_n, n=n, lims=[-1, 1])
+    elif point_gen.n != n:
         raise Exception('Need point dictionary with right number of points!')
 
     V_n = []
     fields = []
 
     for i in range(n):
-        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([side_n, side_n]), div=field_div)
+        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([side_n, side_n]), div=field_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
@@ -1283,17 +1288,187 @@ def make_local_integration_basis(div, int_div, space='H1'):
     W = Basis(M_m, space)
     return W
 
+"""
+*****************************************************************************************
+All the functions below are for building bases from greedy algorithms. Several
+variants are proposed here.
+*****************************************************************************************
+"""
 
-def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a_bar=1.0, c=0.5, verbose=False):
-    """ """
+def make_dictionary(point_gen, fem_div, f=1, verbose=False):
+    
+    basis_div = int(round(math.log(math.sqrt(point_gen.d), 2)))
+    # First we need a point process generator
+    if point_gen.d != 2**basis_div * 2**basis_div:
+        raise Exception('Point generator is not of a correct dyadic level dimension')
+
+    # Now we feed that in to the field generatr
+    D = []
+    fields = []
+    
+    if verbose:
+        print('Generating dictionary point: ', end='')
+    
+    for i in range(point_gen.n):
+        field = DyadicPWConstant(point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        fields.append(field)
+        # Then the fem solver (there a faster way to do this all at once? This will be huge...
+        fem_solver = DyadicFEMSolver(div=fem_div, rand_field=field, f=f)
+        fem_solver.solve()
+        D.append(fem_solver.u)
+
+        if verbose and i % 100 == 0:
+            print('{0}... '.format(i), end='')
+
+    if verbose: 
+        print('')
+
+    return D, fields
+
+class GreedyBasisConstructor(object):
+    """ This is the original greedy algorithm that minimises the Kolmogorov n-width, and a 
+        generic base-class for all other greedy algorithms """
+
+    def __init__(self, n, fem_div, dictionary=None, point_gen=None, verbose=False):
+        """ We need to be either given a dictionary or a point generator that produces d-dimensional points
+            from which we generate the dictionary. """
+        
+        if point_gen is not None and dictionary is not None:
+            raise Exception('Both point generator and dictionary are defined... only one is to be used though, which?')
+        elif point_gen is not None:
+            self.dictionary, self.fields = make_dictionary(point_gen, fem_div, verbose)
+        elif diciontary is not None:
+            self.dictionary = dictionary
+        else:
+            raise Exception('Must specify either point generator or dicitonary')
+
+        self.n = n
+        self.N = len(self.dictionary)
+
+        self.verbose = verbose
+
+        self.greedy_basis = None
+
+    def initial_choice(self):
+        """ Different greedy methods will have their own maximising/minimising criteria, so all 
+        inheritors of this class are expected to overwrite this method to suit their needs. """
+
+        self.norms = np.zeros(self.N)
+        for i in range(self.N):
+            self.norms[i] = self.dictionary[i].norm(space='H1')
+        
+        return np.argmax(self.norms)
+
+    def next_step_choice(self, i):
+        """ Different greedy methods will have their own maximising/minimising criteria, so all 
+        inheritors of this class are expected to overwrite this method to suit their needs. """
+
+        p_V_d = np.zeros(self.N)
+        # We go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
+        for j in range(self.N):
+            p_V_d[j] = self.greedy_basis.project(self.dictionary[j]).norm('H1')
+ 
+        next_crit = self.norms * self.norms - p_V_d * p_V_d
+        ni = np.argmax(next_crit)
+
+        if self.verbose:
+            print('{0} : \t {1} \t {2}'.format(i, self.norms[ni], next_crit[ni]))
+
+        return ni
+
+    def construct_basis(self):
+        " The construction method should be generic enough to support all variants of the greedy algorithms """
+
+        n0 = self.initial_choice()
+
+        self.greedy_basis = Basis([self.dictionary[n0]], space='H1', pre_allocate=self.n)
+        self.greedy_basis.make_grammian()
+
+        if self.verbose:
+            print('\n\nGenerating basis from greedy algorithm with dictionary: ')
+            print('i \t || phi_i || \t\t || phi_i - P_V_(i-1) phi_i ||')
+
+        for i in range(1, self.n):
+            
+            ni = self.next_step_choice(i)
+                
+            self.greedy_basis.add_vector(self.dictionary[ni])
+                   
+        if self.verbose:
+            print('\n\nDone!')
+
+        return self.greedy_basis
+
+class MBGreedyBasisConstructor(GreedyBasisConstructor):
+    """ This greedy algorithm performs the same perpendicular maximisation, but projected on the
+        measurements space provided. This was an attempt to ammeliorate the beta condition between the
+        approx space Vn and meas. space Wm.... but didn't work too well """
+
+    def __init__(self, n, fem_div, Wm, dictionary=None, point_gen=None, verbose=False):
+        """ We need to be either given a dictionary or a point generator that produces d-dimensional points
+            from which we generate the dictionary. """
+        
+        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, verbose=verbose)
+        
+        self.Wm = Wm
+        self.dots = None
+
+    def initial_choice(self):
+        """ Different greedy methods will have their own maximising/minimising criteria, so all 
+        inheritors of this class are expected to overwrite this method to suit their needs. """
+
+        self.dots = np.zeros((self.N, self.Wm.n))
+        self.norms = np.zeros(self.N)
+        for i in range(self.N):
+            self.dots[i,:] = self.Wm.dot(self.dictionary[i])
+            self.norms[i] = np.linalg.norm(self.dots[i])
+        
+        n0 = np.argmax(self.norms)
+
+        # And this is the greedy basis in projection space...
+        self.Vn_W = np.zeros([self.n, self.Wm.n])
+        self.Vn_W[0,:] = self.dots[n0, :]
+
+        self.Vn_loc_G = np.zeros([self.n,self.n])
+        self.Vn_loc_G[0,0] = np.dot(self.Vn_W[0,:], self.Vn_W[0,:])
+
+        return n0
+
+    def next_step_choice(self, i):
+        """ Different greedy methods will have their own maximising/minimising criteria, so all 
+        inheritors of this class are expected to overwrite this method to suit their needs. """
+
+        G = self.Vn_loc_G[:i,:i]
+        p_V_d = np.zeros(self.N)
+        for j in range(self.N):
+
+            c = scipy.linalg.solve(G, np.dot(self.Vn_W[:i,:], self.dots[j]), sym_pos=True)
+            p_v_Vn_Wm = np.dot(c, self.Vn_W[:i])
+            p_V_d[j] = np.linalg.norm(self.dots[j] - p_v_Vn_Wm)
+
+        ni = np.argmax(p_V_d)
+
+        if self.verbose:
+            print('{0} : \t {1} \t {2}'.format(i, self.norms[ni], p_V_d[ni]))
+
+        self.Vn_W[i, :] = self.dots[ni]
+        for j in range(i):
+            self.Vn_loc_G[i,j] = self.Vn_loc_G[j,i] = np.dot(self.Vn_W[i,:], self.Vn_W[j,:])
+            self.Vn_loc_G[i,i] = np.dot(self.Vn_W[i,:], self.Vn_W[i,:])
+        
+        return ni 
+
+def greedy_reduced_basis_construction(n, field_div, fem_div, point_gen=None, dictionary=None, a_bar=1.0, c=0.5, verbose=False):
+    """ This is the "vanilla" flavoured greedy basis algorithm that minimises the Kolmogorov n-width 
+        n is the final size of the basis """
 
     basis_div = field_div
     # First we need a point process generator
-    if point_dictionary.d != 2**basis_div * 2**basis_div:
+    if point_gen.d != 2**basis_div * 2**basis_div:
         raise Exception('Point generator is not of a correct dyadic level dimension')
 
-    d = point_dictionary.d
-    dict_size = point_dictionary.n
+    d = point_gen.d
+    dict_size = point_gen.n
 
     # Now we feed that in to the field generatr
     D = []
@@ -1303,7 +1478,7 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     if verbose:
         print('Generating dictionary point: ', end='')
     for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
@@ -1313,15 +1488,11 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
         
         if verbose and i % 50 == 0:
             print('{0}... '.format(i), end='')
-        
+
     # First find the maximum point by norm in this space
     n0 = np.argmax(norms)
 
-    # We put in the first element - and make the flat values array large so 
-    # that it is essentially pre-allocated, for optimisation purposes...
-    val_flat = np.zeros(np.append(D[0].values.shape, n))
-    val_flat[:,:,0] = D[n0].values
-    Vn_greedy = Basis([D[n0]], space='H1', values_flat=val_flat)
+    Vn_greedy = Basis([D[n0]], space='H1', pre_allocate=n)
 
     Vn_greedy.make_grammian()
 
@@ -1332,8 +1503,8 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     for i in range(1, n):
         
         # Now we go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
-        p_V_d = np.zeros(dict_size)
-        for j in range(dict_size):
+        p_V_d = np.zeros(point_gen.n)
+        for j in range(point_gen.n):
             p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
             
         nj = np.argmax(norms * norms - p_V_d * p_V_d)
@@ -1349,7 +1520,7 @@ def greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, a
     return Vn_greedy
 
 
-def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_dictionary, Wm, a_bar=1.0, c=0.5, verbose=False):
+def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, point_gen, Wm, a_bar=1.0, c=0.5, verbose=False):
     """ Here we apply the greedy algorithm but with respect to the measurement space 
         Note that we assume Wm to be orthonormal! """
 
@@ -1358,11 +1529,11 @@ def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, p
 
     basis_div = field_div
     # First we need a point process generator
-    if point_dictionary.d != 2**basis_div * 2**basis_div:
+    if point_gen.d != 2**basis_div * 2**basis_div:
         raise Exception('Point generator is not of a correct dyadic level dimension')
 
-    d = point_dictionary.d
-    dict_size = point_dictionary.n
+    d = point_gen.d
+    dict_size = point_gen.n
 
     # Now we feed that in to the field generatr
     D = []
@@ -1373,7 +1544,7 @@ def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, p
     if verbose:
         print('Generating dictionary point: ', end='')
     for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_dictionary.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
@@ -1388,11 +1559,7 @@ def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, p
     # First find the maximum point by norm in this space
     n0 = np.argmax(norms)
 
-    # We put in the first element - and make the flat values array large so 
-    # that it is essentially pre-allocated, for optimisation purposes...
-    val_flat = np.zeros(np.append(D[0].values.shape, n))
-    val_flat[:,:,0] = D[n0].values
-    Vn_greedy = Basis([D[n0]], space='H1', values_flat=val_flat)
+    Vn_greedy = Basis([D[n0]], space='H1', pre_allocate=n)
 
     # And this is the greedy basis in projection space...
     Vn_W = np.zeros([n, Wm.n])
@@ -1434,3 +1601,4 @@ def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, p
         print('\n\nDone!')
 
     return Vn_greedy
+
