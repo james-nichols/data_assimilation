@@ -1295,7 +1295,7 @@ variants are proposed here.
 *****************************************************************************************
 """
 
-def make_dictionary(point_gen, fem_div, f=1, verbose=False):
+def make_dictionary(point_gen, fem_div, a_bar=1.0, c=0.5, f=1, verbose=False):
     
     basis_div = int(round(math.log(math.sqrt(point_gen.d), 2)))
     # First we need a point process generator
@@ -1310,7 +1310,7 @@ def make_dictionary(point_gen, fem_div, f=1, verbose=False):
         print('Generating dictionary point: ', end='')
     
     for i in range(point_gen.n):
-        field = DyadicPWConstant(point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
+        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
         fields.append(field)
         # Then the fem solver (there a faster way to do this all at once? This will be huge...
         fem_solver = DyadicFEMSolver(div=fem_div, rand_field=field, f=f)
@@ -1329,14 +1329,14 @@ class GreedyBasisConstructor(object):
     """ This is the original greedy algorithm that minimises the Kolmogorov n-width, and a 
         generic base-class for all other greedy algorithms """
 
-    def __init__(self, n, fem_div, dictionary=None, point_gen=None, verbose=False):
+    def __init__(self, n, fem_div, dictionary=None, point_gen=None, a_bar=1.0, c=0.5, verbose=False):
         """ We need to be either given a dictionary or a point generator that produces d-dimensional points
             from which we generate the dictionary. """
         
         if point_gen is not None and dictionary is not None:
             raise Exception('Both point generator and dictionary are defined... only one is to be used though, which?')
         elif point_gen is not None:
-            self.dictionary, self.fields = make_dictionary(point_gen, fem_div, verbose)
+            self.dictionary, self.fields = make_dictionary(point_gen, fem_div, a_bar, c, verbose=verbose)
         elif diciontary is not None:
             self.dictionary = dictionary
         else:
@@ -1404,18 +1404,20 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
         measurements space provided. This was an attempt to ammeliorate the beta condition between the
         approx space Vn and meas. space Wm.... but didn't work too well """
 
-    def __init__(self, n, fem_div, Wm, dictionary=None, point_gen=None, verbose=False):
+    def __init__(self, n, fem_div, Wm, dictionary=None, point_gen=None, a_bar=1.0, c=0.5,  verbose=False):
         """ We need to be either given a dictionary or a point generator that produces d-dimensional points
             from which we generate the dictionary. """
         
-        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, verbose=verbose)
+        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, a_bar=a_bar, c=c, verbose=verbose)
         
         self.Wm = Wm
         self.dots = None
 
     def initial_choice(self):
-        """ Different greedy methods will have their own maximising/minimising criteria, so all 
-        inheritors of this class are expected to overwrite this method to suit their needs. """
+        """ The initial choice here is the vector in the dictionary that is maximum
+            in the Wm projection, i.e. we dot prod the dictionary members against Wm and look for
+            the maximum. For efficiency means we start constructing Vn_W, the projection of the
+            Vn basis that we are constructing projected in Wm... """
 
         self.dots = np.zeros((self.N, self.Wm.n))
         self.norms = np.zeros(self.N)
@@ -1435,8 +1437,9 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
         return n0
 
     def next_step_choice(self, i):
-        """ Different greedy methods will have their own maximising/minimising criteria, so all 
-        inheritors of this class are expected to overwrite this method to suit their needs. """
+        """ Here we chose the member of the dictionary that has the largest perindicular distance, but
+            projected in the Wm space, so we need to calculate the projection of each dictionary
+            member in Vn projected to Wm... """
 
         G = self.Vn_loc_G[:i,:i]
         p_V_d = np.zeros(self.N)
@@ -1458,64 +1461,102 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
         
         return ni 
 
+class DBGreedyBasisConstructor(GreedyBasisConstructor):
+    """ This is the first of the two proposed data-based greedy basis constructors """
+
+    def __init__(self, n, fem_div, Wm, w, dictionary=None, point_gen=None, verbose=False):
+        """ We need to be either given a dictionary or a point generator that produces d-dimensional points
+            from which we generate the dictionary. """
+        
+        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, verbose=verbose)
+        
+        self.Wm = Wm
+        self.w = w
+        self.w_r = self.Wm.reconstruct(w)
+
+        self.dots = None
+        self.crit = None
+
+    def initial_choice(self):
+
+        self.dots = np.zeros((self.N, self.Wm.n))
+        self.crit = np.zeros(self.N)
+        for i in range(self.N):
+            self.dots[i,:] = self.Wm.dot(self.dictionary[i])
+            self.crit[i] = np.dot(self.w, self.dots[i,:])
+        
+        n0 = np.argmax(self.crit)
+
+        return n0
+
+    def next_step_choice(self, i):
+        
+        for j in range(self.N):
+           
+            perp_data_dist = self.w_r - self.greedy_basis.project(self.w_r, space='H1')
+            self.crit[j] = np.abs(perp_data_dist.dot(dictionary[j]))
+
+        ni = np.argmax(self.crit)
+
+        if self.verbose:
+            print('{0} : \t {1} \t {2}'.format(i, self.norms[ni], p_V_d[ni]))
+
+        return ni 
+
+class PPGreedyBasisConstructor(GreedyBasisConstructor):
+    """ This is the first of the two proposed data-based greedy basis constructors """
+
+    def __init__(self, n, fem_div, Wm, w, dictionary=None, point_gen=None, verbose=False):
+        """ We need to be either given a dictionary or a point generator that produces d-dimensional points
+            from which we generate the dictionary. """
+        
+        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, verbose=verbose)
+        
+        self.Wm = Wm
+        self.w = w
+        self.w_r = self.Wm.reconstruct(w)
+
+        self.dots = None
+        self.crit = None
+
+    def initial_choice(self):
+
+        self.dots = np.zeros((self.N, self.Wm.n))
+        self.crit = np.zeros(self.N)
+        for i in range(self.N):
+            self.dots[i,:] = self.Wm.dot(self.dictionary[i])
+            self.crit[i] = np.dot(self.w, self.dots[i,:])
+        
+        n0 = np.argmax(self.crit)
+
+        return n0
+
+    def next_step_choice(self, i):
+        
+        for j in range(self.N):
+           
+            perp_data_dist = self.w_r - self.greedy_basis.project(self.w_r, space='H1')
+            self.crit[j] = np.abs(perp_data_dist.dot(dictionary[j]))
+
+        ni = np.argmax(self.crit)
+
+        if self.verbose:
+            print('{0} : \t {1} \t {2}'.format(i, self.norms[ni], p_V_d[ni]))
+
+        return ni 
+
 def greedy_reduced_basis_construction(n, field_div, fem_div, point_gen=None, dictionary=None, a_bar=1.0, c=0.5, verbose=False):
     """ This is the "vanilla" flavoured greedy basis algorithm that minimises the Kolmogorov n-width 
-        n is the final size of the basis """
-
-    basis_div = field_div
-    # First we need a point process generator
-    if point_gen.d != 2**basis_div * 2**basis_div:
-        raise Exception('Point generator is not of a correct dyadic level dimension')
-
-    d = point_gen.d
-    dict_size = point_gen.n
-
-    # Now we feed that in to the field generatr
-    D = []
-    fields = []
-    norms = np.zeros(dict_size)
+        n is the final size of the basis 
+        
+        NB This function is maintained purely for backwards compatibility with old tests. It now links to new code
+        contained in the GreedyBasisConstructor class """
     
-    if verbose:
-        print('Generating dictionary point: ', end='')
-    for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
-        fields.append(field)
-        # Then the fem solver (there a faster way to do this all at once? This will be huge...
-        fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
-        fem_solver.solve()
-        D.append(fem_solver.u)
-        norms[i] = D[-1].norm(space='H1')
-        
-        if verbose and i % 50 == 0:
-            print('{0}... '.format(i), end='')
+    Vn_const = grb_cons.construct_basis()
+    Vn_greedy = df.greedy_reduced_basis_construction(n=m, field_div=field_div, fem_div=fem_div, \
+                                                  point_gen=point_gen, a_bar=a_bar, c=c, verbose=True)
+    return Vn_greedy
 
-    # First find the maximum point by norm in this space
-    n0 = np.argmax(norms)
-
-    Vn_greedy = Basis([D[n0]], space='H1', pre_allocate=n)
-
-    Vn_greedy.make_grammian()
-
-    if verbose:
-        print('\n\nGenerating basis from greedy algorithm with dictionary: ')
-        print('i \t || phi_i || \t\t || phi_i - P_V_(i-1) phi_i ||')
-    # Now we start building the basis
-    for i in range(1, n):
-        
-        # Now we go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
-        p_V_d = np.zeros(point_gen.n)
-        for j in range(point_gen.n):
-            p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
-            
-        nj = np.argmax(norms * norms - p_V_d * p_V_d)
-        
-        Vn_greedy.add_vector(D[nj])
-        
-        if verbose:
-            print('{0} : \t {1} \t {2}'.format(i, norms[nj], norms[nj]*norms[nj] - p_V_d[nj] * p_V_d[nj]))
-    
-    if verbose:
-        print('\n\nDone!')
 
     return Vn_greedy
 
@@ -1526,79 +1567,9 @@ def measurement_based_greedy_reduced_basis_construction(n, field_div, fem_div, p
 
     if not isinstance(Wm, OrthonormalBasis):
         raise Exception('Wm must be an orthonormal basis for the data-based greedy algorithm')
-
-    basis_div = field_div
-    # First we need a point process generator
-    if point_gen.d != 2**basis_div * 2**basis_div:
-        raise Exception('Point generator is not of a correct dyadic level dimension')
-
-    d = point_gen.d
-    dict_size = point_gen.n
-
-    # Now we feed that in to the field generatr
-    D = []
-    D_W = []
-    fields = []
-    norms = np.zeros(dict_size)
     
-    if verbose:
-        print('Generating dictionary point: ', end='')
-    for i in range(dict_size):
-        field = DyadicPWConstant(a_bar + c * point_gen.points[i,:].reshape([2**basis_div,2**basis_div]), div=basis_div)
-        fields.append(field)
-        # Then the fem solver (there a faster way to do this all at once? This will be huge...
-        fem_solver = DyadicFEMSolver(div=fem_div, rand_field = field, f = 1)
-        fem_solver.solve()
-        D.append(fem_solver.u)
-        D_W.append(Wm.dot(D[-1]))
-        norms[i] = np.linalg.norm(D_W[-1]) #D[-1].norm(space='H1')
-        
-        if verbose and i % 50 == 0:
-            print('{0}... '.format(i), end='')
-        
-    # First find the maximum point by norm in this space
-    n0 = np.argmax(norms)
-
-    Vn_greedy = Basis([D[n0]], space='H1', pre_allocate=n)
-
-    # And this is the greedy basis in projection space...
-    Vn_W = np.zeros([n, Wm.n])
-    Vn_W[0,:] = D_W[n0]
-
-    Vn_loc_G = np.zeros([n,n])
-    Vn_loc_G[0,0] = np.dot(Vn_W[0,:], Vn_W[0,:])# norms[n0] * norms[n0]
-
-    if verbose:
-        print('\n\nGenerating basis from greedy algorithm with dictionary: ')
-        print('i \t || phi_i || \t\t || phi_i - P_V_(i-1) phi_i ||')
-    # Now we start building the basis
-    for i in range(1, n):
-    
-        G = Vn_loc_G[:i,:i]
-
-        # Now we go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
-        p_V_d = np.zeros(dict_size)
-        for j in range(dict_size):
-            #p_V_d[j] = Vn_greedy.project(D[j]).norm('H1')
-            # Because we're in l2 the projection is much quicker (no dot prods!)
-            
-            c = scipy.linalg.solve(G, np.dot(Vn_W[:i,:], D_W[j]), sym_pos=True)
-            p_v_Vn_Wm = np.dot(c, Vn_W[:i])
-            p_V_d[j] = np.linalg.norm(D_W[j] - p_v_Vn_Wm)
-        
-        nj = np.argmax(p_V_d)
-        
-        Vn_greedy.add_vector(D[nj])
-        Vn_W[i, :] = D_W[nj]
-        for j in range(i):
-            Vn_loc_G[i,j] = Vn_loc_G[j,i] = np.dot(Vn_W[i,:], Vn_W[j,:])
-        Vn_loc_G[i,i] = np.dot(Vn_W[i,:], Vn_W[i,:])
-        
-        if verbose:
-            print('{0} : \t {1} \t {2}'.format(i, norms[nj], norms[nj]*norms[nj] - p_V_d[nj] * p_V_d[nj]))
-    
-    if verbose:
-        print('\n\nDone!')
+    Vn_cons = df.MBGreedyBasisConstructor(n=m, fem_div=fem_div, Wm=Wm, point_gen=point_gen, a_bar=a_bar, c=c, verbose=True)
+    Vn_greedy = mrb_cons.construct_basis()
 
     return Vn_greedy
-
+    
