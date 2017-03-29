@@ -1332,7 +1332,7 @@ class GreedyBasisConstructor(object):
     """ This is the original greedy algorithm that minimises the Kolmogorov n-width, and a 
         generic base-class for all other greedy algorithms """
 
-    def __init__(self, n, fem_div, dictionary=None, point_gen=None, a_bar=1.0, c=0.5, verbose=False):
+    def __init__(self, n, fem_div, dictionary=None, point_gen=None, a_bar=1.0, c=0.5, verbose=False, remove=True):
         """ We need to be either given a dictionary or a point generator that produces d-dimensional points
             from which we generate the dictionary. """
         
@@ -1347,33 +1347,38 @@ class GreedyBasisConstructor(object):
             raise Exception('Must specify either point generator or dicitonary')
 
         self.n = n
-        self.N = len(self.dictionary)
-
         self.verbose = verbose
-
+        self.remove = remove
         self.greedy_basis = None
 
     def initial_choice(self):
         """ Different greedy methods will have their own maximising/minimising criteria, so all 
         inheritors of this class are expected to overwrite this method to suit their needs. """
 
-        self.norms = np.zeros(self.N)
-        for i in range(self.N):
+        self.norms = np.zeros(len(self.dictionary))
+        for i in range(len(self.dictionary)):
             self.norms[i] = self.dictionary[i].norm(space='H1')
         
-        return np.argmax(self.norms)
+        n0 = np.argmax(self.norms)
+        if self.remove:
+            self.norms = np.delete(self.norms, n0)
+
+        return n0
 
     def next_step_choice(self, i):
         """ Different greedy methods will have their own maximising/minimising criteria, so all 
         inheritors of this class are expected to overwrite this method to suit their needs. """
 
-        p_V_d = np.zeros(self.N)
+        p_V_d = np.zeros(len(self.dictionary))
         # We go through the dictionary and find the max of || f ||^2 - || P_Vn f ||^2
-        for j in range(self.N):
+        for j in range(len(self.dictionary)):
             p_V_d[j] = self.greedy_basis.project(self.dictionary[j]).norm('H1')
- 
+        
         next_crit = self.norms * self.norms - p_V_d * p_V_d
         ni = np.argmax(next_crit)
+
+        if self.remove:
+            self.norms = np.delete(self.norms, ni)
 
         if self.verbose:
             print('{0} : \t {1} \t {2}'.format(i, self.norms[ni], next_crit[ni]))
@@ -1388,6 +1393,9 @@ class GreedyBasisConstructor(object):
 
             self.greedy_basis = Basis([self.dictionary[n0]], space='H1', pre_allocate=self.n)
             self.greedy_basis.make_grammian()
+            
+            if self.remove:
+                del self.dictionary[n0]
 
             if self.verbose:
                 print('\n\nGenerating basis from greedy algorithm with dictionary: ')
@@ -1398,6 +1406,8 @@ class GreedyBasisConstructor(object):
                 ni = self.next_step_choice(i)
                     
                 self.greedy_basis.add_vector(self.dictionary[ni])
+                if self.remove:
+                    del self.dictionary[ni]
                        
             if self.verbose:
                 print('\n\nDone!')
@@ -1411,11 +1421,11 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
         measurements space provided. This was an attempt to ammeliorate the beta condition between the
         approx space Vn and meas. space Wm.... but didn't work too well """
 
-    def __init__(self, n, fem_div, Wm, dictionary=None, point_gen=None, a_bar=1.0, c=0.5,  verbose=False):
+    def __init__(self, n, fem_div, Wm, dictionary=None, point_gen=None, a_bar=1.0, c=0.5, verbose=False, remove=True):
         """ We need to be either given a dictionary or a point generator that produces d-dimensional points
             from which we generate the dictionary. """
         
-        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, a_bar=a_bar, c=c, verbose=verbose)
+        super().__init__(n, fem_div, dictionary=dictionary, point_gen=point_gen, a_bar=a_bar, c=c, verbose=verbose, remove=remove)
         
         self.Wm = Wm
         self.dots = None
@@ -1426,9 +1436,9 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
             the maximum. For efficiency means we start constructing Vn_W, the projection of the
             Vn basis that we are constructing projected in Wm... """
 
-        self.dots = np.zeros((self.N, self.Wm.n))
-        self.norms = np.zeros(self.N)
-        for i in range(self.N):
+        self.dots = np.zeros((len(self.dictionary), self.Wm.n))
+        self.norms = np.zeros(len(self.dictionary))
+        for i in range(len(self.dictionary)):
             self.dots[i,:] = self.Wm.dot(self.dictionary[i])
             self.norms[i] = np.linalg.norm(self.dots[i])
         
@@ -1441,6 +1451,10 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
         self.Vn_loc_G = np.zeros([self.n,self.n])
         self.Vn_loc_G[0,0] = np.dot(self.Vn_W[0,:], self.Vn_W[0,:])
 
+        if self.remove:
+            self.norms = np.delete(self.norms, n0)
+            self.dots = np.delete(self.dots, n0, 0)
+
         return n0
 
     def next_step_choice(self, i):
@@ -1449,8 +1463,8 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
             member in Vn projected to Wm... """
 
         G = self.Vn_loc_G[:i,:i]
-        p_V_d = np.zeros(self.N)
-        for j in range(self.N):
+        p_V_d = np.zeros(len(self.dictionary))
+        for j in range(len(self.dictionary)):
 
             c = scipy.linalg.solve(G, np.dot(self.Vn_W[:i,:], self.dots[j]), sym_pos=True)
             p_v_Vn_Wm = np.dot(c, self.Vn_W[:i])
@@ -1466,6 +1480,10 @@ class MBGreedyBasisConstructor(GreedyBasisConstructor):
             self.Vn_loc_G[i,j] = self.Vn_loc_G[j,i] = np.dot(self.Vn_W[i,:], self.Vn_W[j,:])
             self.Vn_loc_G[i,i] = np.dot(self.Vn_W[i,:], self.Vn_W[i,:])
         
+        if self.remove:
+            self.norms = np.delete(self.norms, ni)
+            self.dots = np.delete(self.dots, ni, 0)
+
         return ni 
 
 class DBGreedyBasisConstructor(GreedyBasisConstructor):
@@ -1483,34 +1501,38 @@ class DBGreedyBasisConstructor(GreedyBasisConstructor):
 
         # This is the dictionary projected in to 
         self.D_Wm = None
-        self.crit = None
 
     def initial_choice(self):
 
         self.D_Wm = []
-        self.crit = np.zeros(self.N)
-        for i in range(self.N):
+        crit = np.zeros(len(self.dictionary))
+        for i in range(len(self.dictionary)):
             dot = self.Wm.dot(self.dictionary[i])
 
             self.D_Wm.append(self.Wm.reconstruct(dot) / np.linalg.norm(dot))
-            self.crit[i] = np.abs(self.w_r.dot(self.D_Wm[-1]))
+            crit[i] = np.abs(self.w_r.dot(self.D_Wm[-1]))
         
-        n0 = np.argmax(self.crit)
+        n0 = np.argmax(crit)
+
+        if self.remove:
+            del self.D_Wm[n0]
 
         return n0
 
     def next_step_choice(self, i):
         
         perp_data_dist = self.w_r - self.greedy_basis.project(self.w_r)
+        crit = np.zeros(len(self.dictionary))
         for j in range(len(self.D_Wm)):
-            self.crit[j] = np.abs(perp_data_dist.dot(self.D_Wm[j]))
+            crit[j] = np.abs(perp_data_dist.dot(self.D_Wm[j]))
 
-        ni = np.argmax(self.crit[:len(self.D_Wm)])
-        del self.dictionary[ni]
-        del self.D_Wm[ni]
+        ni = np.argmax(crit)
 
         if self.verbose:
-            print('{0} : \t {1} \t {2} \t {3}'.format(i, ni, self.crit[ni], perp_data_dist.norm()))
+            print('{0} : \t {1} \t {2} \t {3}'.format(i, ni, crit[ni], perp_data_dist.norm()))
+
+        if self.remove:
+            del self.D_Wm[ni]
 
         return ni 
 
@@ -1527,29 +1549,31 @@ class PPGreedyBasisConstructor(GreedyBasisConstructor):
         self.w = w
         self.w_r = self.Wm.reconstruct(w)
 
-        self.dots = None
-        self.crit = None
-
     def initial_choice(self):
         
-        self.dots = np.zeros(self.N)
-        for i in range(self.N):
-            self.dots[i] = np.abs(self.dictionary[i].dot(self.w_r, space='H1'))
+        dots = np.zeros(len(self.dictionary))
+        for i in range(len(self.dictionary)):
+            dots[i] = np.abs(self.dictionary[i].dot(self.w_r, space='H1'))
+    
+        n0 = np.argmax(dots)
         
-        return np.argmax(self.dots)
+        if self.verbose:
+            print('{0} : \t {1} \t {2}'.format(0, n0, dots[n0]))
+
+        return n0
 
     def next_step_choice(self, i):
         
+        dots = np.zeros(len(self.dictionary))
         for j in range(len(self.dictionary)):
            
             perp_data_dist = self.dictionary[j] - self.greedy_basis.project(self.dictionary[j])
-            self.dots[j] = np.abs(perp_data_dist.dot(self.w_r) / perp_data_dist.norm(space='H1'))
-
-        ni = np.argmax(self.dots[:len(self.dictionary)])
-        del self.dictionary[ni]
+            dots[j] = np.abs(perp_data_dist.dot(self.w_r) / perp_data_dist.norm(space='H1'))
+        
+        ni = np.argmax(dots)
 
         if self.verbose:
-            print('{0} : \t {1} \t {2}'.format(i, ni, self.dots[ni]))
+            print('{0} : \t {1} \t {2}'.format(i, ni, dots[ni]))
 
         return ni 
 
