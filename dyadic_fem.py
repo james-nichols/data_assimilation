@@ -619,8 +619,6 @@ class DyadicPWHybrid(object):
         u = self.interpolate(d)
         v = other.interpolate(d)
 
-        
-
         return self.L2_inner(u.l_values, v.l_values, u.c_values, v.c_values, d)
 
     def L2_inner(self, u, v, p, q, d):
@@ -783,29 +781,35 @@ class Basis(object):
     """ A vaguely useful encapsulation of what you'd wanna do with a basis,
         including an orthonormalisation procedure """
 
-    def __init__(self, vecs, space='H1', values_flat=None, pre_allocate=0):
-        # No smart initialisation here...
-        self.vecs = vecs
-        self.n = len(vecs)
-        self.space = space
-        # Make a flat "values" thing for speed's sake, so we
-        # can use numpy power!
-        # NB we allow it to be set externally for accessing speed
+    def __init__(self, vecs=None, space='H1', values_flat=None, pre_allocate=0, file_name=None):
+        
+        if vecs is not None:
+            self.vecs = vecs
+            self.n = len(vecs)
+            self.space = space
+            # Make a flat "values" thing for speed's sake, so we
+            # can use numpy power!
+            # NB we allow it to be set externally for accessing speed
 
-        if values_flat is None:
-            # Pre-allocate here is used for speed purposes... so that memory is allocated and ready to go...
-            self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
-            for i, vec in enumerate(self.vecs):
-                self.values_flat[:,:,i] = vec.values
+            if values_flat is None:
+                # Pre-allocate here is used for speed purposes... so that memory is allocated and ready to go...
+                self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
+                for i, vec in enumerate(self.vecs):
+                    self.values_flat[:,:,i] = vec.values
+            else:
+                if values_flat.shape[2] != self.n:
+                    raise Exception('Incorrectly sized flat value matrix, are the contents correct?')
+                self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
+                self.values_flat[:,:,:self.n] = values_flat
+
+            self.orthonormal_basis = None
+            self.G = None
+            self.U = self.S = self.V = None
+
+        elif file_name is not None:
+            self.load(file_name)
         else:
-            if values_flat.shape[2] != self.n:
-                raise Exception('Incorrectly sized flat value matrix, are the contents correct?')
-            self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
-            self.values_flat[:,:,:self.n] = values_flat
-
-        self.orthonormal_basis = None
-        self.G = None
-        self.U = self.S = self.V = None
+            raise Exception('Basis either needs vector initialisation or file name!')
     
     def add_vector(self, vec):
         """ Add just one vector, so as to make the new Grammian calculation quick """
@@ -947,13 +951,43 @@ class Basis(object):
 
         return self.orthonormal_basis
 
+    def save(self, file_name):
+        if self.G is not None:
+            if self.S is not None and self.U is not None and self.V is not None:
+                np.savez_compressed(file_name, values_flat=self.values_flat, G=self.G, S=self.S, U=self.U, V=self.V)
+            else:
+                np.savez_compressed(file_name, values_flat=self.values_flat, G=self.G)
+        else:
+            np.savez_compressed(file_name, values_flat=self.values_flat)
+
+    def load(self, file_name):
+
+        data = np.load(file_name)
+
+        self.values_flat = data['values_flat']
+
+        self.vecs = []
+        for i in range(self.values_flat.shape[-1]):
+            self.vecs.append(DyadicPWLinear(self.values_flat[:,:,i]))
+
+        if 'G' in data.files:
+            self.G = data['G']
+        else:
+            self.G = None
+        if 'S' in data.files and 'U' in data.files and 'V' in data.files:
+            self.S = data['S']
+            self.U = data['U']
+            self.V = data['V']
+        else:
+            self.S = self.U = self.V = None
+
 class OrthonormalBasis(Basis):
 
-    def __init__(self, vecs, space='H1', values_flat=None):
+    def __init__(self, vecs=None, space='H1', values_flat=None, file_name=None):
         # We quite naively assume that the basis we are given *is* in 
         # fact orthonormal, and don't do any testing...
 
-        super().__init__(vecs, space=space, values_flat=values_flat)
+        super().__init__(vecs=vecs, space=space, values_flat=values_flat, file_name=file_name)
         #self.G = np.eye(self.n)
         self.G = sparse.identity(self.n)
 
@@ -1499,7 +1533,7 @@ class DBGreedyBasisConstructor(GreedyBasisConstructor):
         self.w = w
         self.w_r = self.Wm.reconstruct(w)
 
-        # This is the dictionary projected in to 
+        # This is the dictionary projected in to Wm 
         self.D_Wm = None
 
     def initial_choice(self):
