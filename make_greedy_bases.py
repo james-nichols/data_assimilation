@@ -8,15 +8,11 @@ This is a simple script to create and save various greedy bases
 """
 
 import numpy as np
-import importlib
 import dyadic_fem as df
 import point_generator as pg
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pdb
-importlib.reload(df)
-importlib.reload(pg)
-%matplotlib inline
 
 fem_div = 7
 
@@ -72,7 +68,7 @@ u_dict_mc, dict_fields_mc = df.make_dictionary(point_gen_mc, fem_div, a_bar=a_ba
 
 u_dict_l_mc, dict_fields_l_mc = df.make_dictionary(point_gen_l_mc, fem_div, a_bar=a_bar, c=c, verbose=False)
 
-gr_cons = df.GreedyBasisConstructor(n=m, fem_div=fem_div, dictionary=u_dict_mc, verbose=True)
+gr_cons_mc = df.GreedyBasisConstructor(n=m, fem_div=fem_div, dictionary=u_dict_mc, verbose=True)
 Vn_gr = gr_cons_mc.construct_basis()
 Vn_gr.save('Vn_gr')
 

@@ -8,15 +8,11 @@ This is a simple script to create and save various greedy bases
 """
 
 import numpy as np
-import importlib
 import dyadic_fem as df
 import point_generator as pg
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pdb
-importlib.reload(df)
-importlib.reload(pg)
-%matplotlib inline
 
 fem_div = 7
 
