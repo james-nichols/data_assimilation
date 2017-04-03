@@ -965,10 +965,13 @@ class Basis(object):
         data = np.load(file_name)
 
         self.values_flat = data['values_flat']
-
+        
         self.vecs = []
         for i in range(self.values_flat.shape[-1]):
             self.vecs.append(DyadicPWLinear(self.values_flat[:,:,i]))
+        
+        # TODO: make this a part of the saved file format...
+        self.space = 'H1'
 
         if 'G' in data.files:
             self.G = data['G']
