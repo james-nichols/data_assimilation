@@ -787,21 +787,23 @@ class Basis(object):
             self.vecs = vecs
             self.n = len(vecs)
             self.space = space
+
             # Make a flat "values" thing for speed's sake, so we
             # can use numpy power!
             # NB we allow it to be set externally for accessing speed
-
             if values_flat is None:
                 # Pre-allocate here is used for speed purposes... so that memory is allocated and ready to go...
-                self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
+                self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(self.n, pre_allocate)))
                 for i, vec in enumerate(self.vecs):
                     self.values_flat[:,:,i] = vec.values
             else:
-                if values_flat.shape[2] != self.n:
+                if values_flat.shape[2] < self.n:
                     raise Exception('Incorrectly sized flat value matrix, are the contents correct?')
-                self.values_flat =  np.zeros(np.append(self.vecs[0].values.shape, max(len(self.vecs), pre_allocate)))
-                self.values_flat[:,:,:self.n] = values_flat
-
+                else:
+                    self.values_flat = np.zeros(np.append(self.vecs[0].values.shape, \
+                                                max(self.n, pre_allocate, values_flat.shape[2]) ))
+                    self.values_flat[:,:,:values_flat.shape[2]] = values_flat
+                        
             self.orthonormal_basis = None
             self.G = None
             self.U = self.S = self.V = None
@@ -1049,6 +1051,9 @@ class BasisPair(object):
     def make_favorable_basis(self):
         if isinstance(self, FavorableBasisPair):
             return self
+        
+        if not isinstance(self.Wm, OrthonormalBasis) or not isinstance(self.Vn, OrthonormalBasis):
+            raise Exception('Both Wm and Vn must be orthonormal to calculate the favourable basis!')
 
         if self.U is None or self.S is None or self.V is None:
             self.calc_svd()
